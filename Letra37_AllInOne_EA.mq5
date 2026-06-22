@@ -2747,6 +2747,12 @@ bool   ctx_atFlip=false;          // price has reached / is inside the HTF FU fl
 string ctx_campaign="EXPANSION";  // EXPANSION (building) / TERMINAL (at flip)
 double ctx_distFlipAtr=0.0;       // distance to the flip magnet in ATR
 bool   ctx_fuMerged=false;        // recursive curve respected the parent FU -> camp merged back (Principle 9)
+//--- F72 Wyckoff terminal shift counter (spring/test/LPS1/LPS2 - "always four") ---
+int    ctx_termShifts=0;          // recursive change-of-character shifts counted inside the flip zone
+int    ctx_termExpected=4;        // expected shifts to complete the terminal sequence (compression-modulated)
+bool   ctx_termComplete=false;    // terminal entry cycle has matured (enough shifts done)
+//--- persistent terminal-counter state (updated once per bar) ---
+bool   g_termActive=false; int g_termShifts=0; int g_termPrevDirM5=0;
 //--- TIE detail ---
 string ctx_h1Timing="—"; double ctx_wp=0, ctx_atr=0;
 
@@ -3003,6 +3009,18 @@ void ContextRun(const int bars)
    //  campaign merged back into the parent (not a genuinely new camp).
    ctx_fuMerged = (ctx_fuFresh && !naf(ctx_fuTip) && !naf(_flipMag) && atrL>0 && MathAbs(ctx_fuTip-_flipMag)<=atrL*0.75);
 
+   //  Wyckoff terminal sequence: count recursive change-of-character shifts WHILE inside the
+   //  flip zone (the spring/test/LPS1/LPS2 - "always four"). Entry matures on the completing
+   //  shift, not the first strike. Compression sets how many shifts to expect (tight -> fewer/faster).
+   int _expShifts=(int)clamp(nz((double)cur_expRecDepth,3.0),2.0,4.0);
+   if(!ctx_atFlip){ g_termActive=false; g_termShifts=0; }
+   else {
+      if(!g_termActive){ g_termActive=true; g_termShifts=0; g_termPrevDirM5=cur_dirM5; }
+      if(cur_dirM5!=0 && cur_dirM5!=g_termPrevDirM5){ g_termShifts++; g_termPrevDirM5=cur_dirM5; }  // a CHoCH inside the zone = one shift
+   }
+   ctx_termShifts=g_termShifts; ctx_termExpected=_expShifts;
+   ctx_termComplete=(ctx_atFlip && g_termShifts>=_expShifts);
+
    //--- publish FEATURE outputs only (NO Senseei decision layer) ---
    ctx_fuFresh=fuFresh; ctx_fuDir=fuDir; ctx_fuTip=fuTip; ctx_fuMid=fuMid;
    ctx_waveDir=waveDir; ctx_stackDir=stackDir; ctx_netBias=netBias; ctx_pdir=pdir; ctx_timeDir=timeDir;
@@ -3127,6 +3145,7 @@ input int    InpMinEntryRung     = 1;      // Lowest rung allowed for a multi-TF
 input double InpMinDomTransfer   = 45.0;   // Min dominance-transfer % to treat a Return as an ENTRY CYCLE (below = first strike, wait)
 input double InpMinEntryProb     = 0.0;    // Optional: min entry-cycle probability % to allow a multi-TF entry (0 = off)
 input bool   InpRequireAtFlip    = false;  // Optional: only take multi-TF entries when price is AT the HTF FU flip zone (terminal side)
+input int    InpMinTermShifts    = 0;      // Optional: at the flip zone, require N terminal shifts (Wyckoff ~4) before entering (0 = off)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -3511,9 +3530,10 @@ void TryEnter()
    //  Only a genuine ENTRY CYCLE (dominance transferred to the recursive wave) qualifies;
    //  a first strike (low dominance) is skipped — the curve is still building.
    if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
-      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && (!InpRequireAtFlip || !InpUseV60Context || ctx_atFlip)){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
+      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && (!InpRequireAtFlip || !InpUseV60Context || ctx_atFlip) && (InpMinTermShifts<=0 || !InpUseV60Context || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts)){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
       else if(cur_mtfEntryDom<InpMinDomTransfer) gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
       else if(InpRequireAtFlip && InpUseV60Context && !ctx_atFlip) gEntryBlock="not at flip zone ("+DoubleToString(ctx_distFlipAtr,1)+"ATR away)";
+      else if(InpMinTermShifts>0 && InpUseV60Context && ctx_atFlip && ctx_termShifts<InpMinTermShifts) gEntryBlock="terminal building "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(InpMinTermShifts)+" shifts";
       else gEntryBlock="entry prob low "+IntegerToString((int)cur_entryProb)+"%";
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
@@ -3748,7 +3768,7 @@ void ShowStatus()
    s+="Curve  : own "+cur_curveOwner+" "+f_waveDirLabel(cur_ownerDir)+"  "+cur_transState+"  ["+cur_entryReady+"]\n";
    s+="Recur  : dom "+R0(cur_domTransfer)+"%  comp "+cur_compRegime+"  depth "+IntegerToString(cur_recDepth)+"/"+IntegerToString(cur_expRecDepth)+(cur_mtfEntryFresh?("  | RET "+cur_mtfEntryTF+" "+(cur_mtfEntryDir==1?"L":"S")+" dom "+R0(cur_mtfEntryDom)+"%"):"")+"\n";
    s+="Cap    : budget "+R0(cur_curveBudget)+"%  toFlip "+DoubleToString(cur_distFlipAtr,1)+"ATR  entryP "+R0(cur_entryProb)+"%\n";
-   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
+   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_atFlip?("  shifts "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(ctx_termExpected)+(ctx_termComplete?" DONE":"")):"")+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";

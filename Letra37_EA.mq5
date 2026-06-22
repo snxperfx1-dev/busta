@@ -131,6 +131,7 @@ input int    InpMinEntryRung     = 1;      // Lowest rung allowed for a multi-TF
 input double InpMinDomTransfer   = 45.0;   // Min dominance-transfer % to treat a Return as an ENTRY CYCLE (below = first strike, wait)
 input double InpMinEntryProb     = 0.0;    // Optional: min entry-cycle probability % to allow a multi-TF entry (0 = off)
 input bool   InpRequireAtFlip    = false;  // Optional: only take multi-TF entries when price is AT the HTF FU flip zone (terminal side)
+input int    InpMinTermShifts    = 0;      // Optional: at the flip zone, require N terminal shifts (Wyckoff ~4) before entering (0 = off)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -515,9 +516,10 @@ void TryEnter()
    //  Only a genuine ENTRY CYCLE (dominance transferred to the recursive wave) qualifies;
    //  a first strike (low dominance) is skipped — the curve is still building.
    if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
-      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && (!InpRequireAtFlip || !InpUseV60Context || ctx_atFlip)){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
+      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && (!InpRequireAtFlip || !InpUseV60Context || ctx_atFlip) && (InpMinTermShifts<=0 || !InpUseV60Context || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts)){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
       else if(cur_mtfEntryDom<InpMinDomTransfer) gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
       else if(InpRequireAtFlip && InpUseV60Context && !ctx_atFlip) gEntryBlock="not at flip zone ("+DoubleToString(ctx_distFlipAtr,1)+"ATR away)";
+      else if(InpMinTermShifts>0 && InpUseV60Context && ctx_atFlip && ctx_termShifts<InpMinTermShifts) gEntryBlock="terminal building "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(InpMinTermShifts)+" shifts";
       else gEntryBlock="entry prob low "+IntegerToString((int)cur_entryProb)+"%";
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
@@ -752,7 +754,7 @@ void ShowStatus()
    s+="Curve  : own "+cur_curveOwner+" "+f_waveDirLabel(cur_ownerDir)+"  "+cur_transState+"  ["+cur_entryReady+"]\n";
    s+="Recur  : dom "+R0(cur_domTransfer)+"%  comp "+cur_compRegime+"  depth "+IntegerToString(cur_recDepth)+"/"+IntegerToString(cur_expRecDepth)+(cur_mtfEntryFresh?("  | RET "+cur_mtfEntryTF+" "+(cur_mtfEntryDir==1?"L":"S")+" dom "+R0(cur_mtfEntryDom)+"%"):"")+"\n";
    s+="Cap    : budget "+R0(cur_curveBudget)+"%  toFlip "+DoubleToString(cur_distFlipAtr,1)+"ATR  entryP "+R0(cur_entryProb)+"%\n";
-   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
+   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_atFlip?("  shifts "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(ctx_termExpected)+(ctx_termComplete?" DONE":"")):"")+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";

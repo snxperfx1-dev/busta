@@ -255,6 +255,12 @@ bool   ctx_atFlip=false;          // price has reached / is inside the HTF FU fl
 string ctx_campaign="EXPANSION";  // EXPANSION (building) / TERMINAL (at flip)
 double ctx_distFlipAtr=0.0;       // distance to the flip magnet in ATR
 bool   ctx_fuMerged=false;        // recursive curve respected the parent FU -> camp merged back (Principle 9)
+//--- F72 Wyckoff terminal shift counter (spring/test/LPS1/LPS2 - "always four") ---
+int    ctx_termShifts=0;          // recursive change-of-character shifts counted inside the flip zone
+int    ctx_termExpected=4;        // expected shifts to complete the terminal sequence (compression-modulated)
+bool   ctx_termComplete=false;    // terminal entry cycle has matured (enough shifts done)
+//--- persistent terminal-counter state (updated once per bar) ---
+bool   g_termActive=false; int g_termShifts=0; int g_termPrevDirM5=0;
 //--- TIE detail ---
 string ctx_h1Timing="—"; double ctx_wp=0, ctx_atr=0;
 
@@ -510,6 +516,18 @@ void ContextRun(const int bars)
    //  the network attractor means the recursive curve respected the parent FU, so the
    //  campaign merged back into the parent (not a genuinely new camp).
    ctx_fuMerged = (ctx_fuFresh && !naf(ctx_fuTip) && !naf(_flipMag) && atrL>0 && MathAbs(ctx_fuTip-_flipMag)<=atrL*0.75);
+
+   //  Wyckoff terminal sequence: count recursive change-of-character shifts WHILE inside the
+   //  flip zone (the spring/test/LPS1/LPS2 - "always four"). Entry matures on the completing
+   //  shift, not the first strike. Compression sets how many shifts to expect (tight -> fewer/faster).
+   int _expShifts=(int)clamp(nz((double)cur_expRecDepth,3.0),2.0,4.0);
+   if(!ctx_atFlip){ g_termActive=false; g_termShifts=0; }
+   else {
+      if(!g_termActive){ g_termActive=true; g_termShifts=0; g_termPrevDirM5=cur_dirM5; }
+      if(cur_dirM5!=0 && cur_dirM5!=g_termPrevDirM5){ g_termShifts++; g_termPrevDirM5=cur_dirM5; }  // a CHoCH inside the zone = one shift
+   }
+   ctx_termShifts=g_termShifts; ctx_termExpected=_expShifts;
+   ctx_termComplete=(ctx_atFlip && g_termShifts>=_expShifts);
 
    //--- publish FEATURE outputs only (NO Senseei decision layer) ---
    ctx_fuFresh=fuFresh; ctx_fuDir=fuDir; ctx_fuTip=fuTip; ctx_fuMid=fuMid;
