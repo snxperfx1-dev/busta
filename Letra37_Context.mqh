@@ -241,6 +241,8 @@ double ctx_stackPct=0, ctx_pressure=0, ctx_residual=0, ctx_attractorScore=0, ctx
 int    ctx_resCode=0, ctx_eligN=0;
 string ctx_phase="Point 4 Origin";
 double ctx_entry=NA, ctx_stop=NA, ctx_t1=NA, ctx_t2=NA, ctx_t3=NA, ctx_attractorPx=NA, ctx_netTarget=NA, ctx_fezHi=NA, ctx_fezLo=NA;
+//--- freshest FU node (the indicator's "extreme entry") ---
+bool   ctx_fuFresh=false; int ctx_fuDir=0; double ctx_fuTip=NA, ctx_fuMid=NA;
 //--- curve life (management) ---
 double ctx_life=50.0, ctx_cpForce=0; string ctx_cpState="NEUTRAL", ctx_alive="WEAKENING";
 //--- narrative lineage / ownership migration (context) ---
@@ -465,7 +467,17 @@ void ContextRun(const int bars)
    double mig50=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.5*(c_inv-cExtreme);
    double mig618=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.618*(c_inv-cExtreme);
 
+   //--- freshest FU node formed on the last closed bar = the indicator's extreme entry ---
+   bool fuFresh=false; int fuDir=0; double fuTip=NA, fuMid=NA; double fuAuth=-1.0;
+   for(int fi=0;fi<ArraySize(sn_px);fi++){
+      if(sn_bar[fi]==last && sn_state[fi]!=2){
+         double a=f_authSen(fi);
+         if(a>=sIn_authMin && a>fuAuth){ fuAuth=a; fuFresh=true; fuDir=sn_dir[fi]; fuTip=sn_px[fi]; fuMid=sn_mid[fi]; }
+      }
+   }
+
    //--- publish FEATURE outputs only (NO Senseei decision layer) ---
+   ctx_fuFresh=fuFresh; ctx_fuDir=fuDir; ctx_fuTip=fuTip; ctx_fuMid=fuMid;
    ctx_waveDir=waveDir; ctx_stackDir=stackDir; ctx_netBias=netBias; ctx_pdir=pdir; ctx_timeDir=timeDir;
    ctx_stackPct=stackPct; ctx_pressure=pressure; ctx_residual=residual; ctx_attractorScore=attractorScore;
    ctx_timeAlign=timeAlign; ctx_timeConflict=timeConflict; ctx_resCode=resCode; ctx_eligN=eligN; ctx_phase=phaseStr;

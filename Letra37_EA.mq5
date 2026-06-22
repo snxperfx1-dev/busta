@@ -117,6 +117,7 @@ input double InpTIEStrongAlign  = 60.0;    // TIE: "strong" cycle alignment thre
 input bool   InpAggressiveEntry = true;    // AGGRESSIVE: also enter on v60 confluence (network+curve+wave), bypassing strict Return/ERF gate
 input bool   InpAggReqNet       = true;    // Aggressive: require network bias to agree
 input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
+input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the indicator's extreme) - stop beyond the wick tip
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
@@ -424,7 +425,11 @@ double ComputeTP(const int dir,const double entry,const double sl)
 void TryEnter()
 {
    int dir=DesiredDirection();
-   bool aggressive=false;
+   bool aggressive=false, fuEntry=false;
+   //--- PRIORITY: enter AT the fresh FU node (the indicator's extreme) ---
+   if(dir==0 && InpUseV60Context && InpFUExtremeEntry && ctx_fuFresh && ctx_fuDir!=0){
+      dir=ctx_fuDir; aggressive=true; fuEntry=true;
+   }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
    if(dir==0 && InpUseV60Context && InpAggressiveEntry){
       int adir=ctx_waveDir;
@@ -460,12 +465,20 @@ void TryEnter()
    sym.RefreshRates();
    double ask=sym.Ask(), bid=sym.Bid();
    double entry=(dir==1?ask:bid);
-   double slBase=ComputeSL(dir,entry);
+   double slBase;
+   if(fuEntry && !naf(ctx_fuTip)){
+      double a=cur_atr; if(a<=0) a=10*_Point;
+      slBase=(dir==1? ctx_fuTip - InpMinSLAtr*a : ctx_fuTip + InpMinSLAtr*a);   // stop BEYOND the FU wick extreme
+      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*a);
+      if(dir==1 && slBase>entry-minD) slBase=entry-minD;
+      if(dir==-1&& slBase<entry+minD) slBase=entry+minD;
+      slBase=NormPrice(slBase);
+   } else slBase=ComputeSL(dir,entry);
    double lot=CalcLot(entry,slBase);
    double tp=ComputeTP(dir,entry,slBase);
    bool _arrow=(dir==1?cur_longSignal:cur_shortSignal);
    bool _doe=(dir==1?(cur_doeAction=="Long"):(cur_doeAction=="Short"));
-   string _trig=aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
+   string _trig=fuEntry?"FU":aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
    string cmt=InpComment+" "+_trig+" "+cur_tqeGrade;
 
    bool ok=false;
@@ -612,6 +625,7 @@ void ShowStatus()
       s+="\nCurve "+ctx_alive+"  life "+R0(ctx_life)+"  force "+ctx_cpState;
       s+="\nv60Phase "+ctx_phase+"  Narr "+ctx_narrState+" "+R0(ctx_narrative)+(ctx_converging?" (converging)":"");
       s+="\nTime "+(ctx_timeDir==1?"CLIMB":ctx_timeDir==-1?"DIVE":"LEVEL")+" "+R0(ctx_timeAlign)+"%  H1 "+ctx_h1Timing+"  attr "+PXs(ctx_attractorPx);
+      s+="\nFU node "+(ctx_fuFresh?((ctx_fuDir==1?"BULL @ ":"BEAR @ ")+PXs(ctx_fuTip)):"- (none fresh)");
    }
    Comment(s);
 }
