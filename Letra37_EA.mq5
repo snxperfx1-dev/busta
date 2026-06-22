@@ -115,11 +115,15 @@ input bool   InpReqNarrative    = false;   // Require narrative not WEAKENING
 input bool   InpReqTimeAlign    = false;   // Require time-cycle alignment
 input double InpMinTimeAlign    = 55.0;    // Min TIE alignment %
 input bool   InpBlockV60Terminal= true;    // Block entry when v60 phase is Liquidation/Terminal against dir
+input bool   InpTIEBlockOpposed = true;    // TIE: block entry when a strongly-aligned cycle stack opposes
+input double InpTIEStrongAlign  = 60.0;    // TIE: "strong" cycle alignment threshold %
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
 input double InpCurveDeadBelow  = 32.0;    // life <= this => DEAD (close)
 input bool   InpUseMigrationTrail= false;  // Keep stop at ownership-migration 0.618 band while force persists
+input bool   InpUseNarrativeMgmt= true;    // Manage with narrative lineage / chain vitality
+input double InpChainExitBelow  = 25.0;    // Exit when chain vitality <= this (story decayed across curves)
 
 //==================================================================
 // EA GLOBALS
@@ -357,6 +361,7 @@ bool PassesFilters(const int dir)
       if(InpReqNarrative  && sen_narrState=="WEAKENING") return(false);
       if(InpReqTimeAlign  && sen_timeAlign<InpMinTimeAlign) return(false);
       if(InpBlockV60Terminal && (sen_phase=="Liquidation"||sen_phase=="Terminal Curve") && sen_waveDir!=0 && sen_waveDir!=dir) return(false);
+      if(InpTIEBlockOpposed && sen_timeAlign>=InpTIEStrongAlign && sen_timeDir!=0 && sen_timeDir!=dir) return(false);
    }
    return(true);
 }
@@ -485,6 +490,15 @@ void ManagePositions()
       if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
       //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
       if(InpUseV60Context && InpUseCurveLifeExit && sen_life<=InpCurveDeadBelow && dir==sen_waveDir){ trade.PositionClose(tk); continue; }
+      //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
+      if(InpUseV60Context && InpUseNarrativeMgmt && dir==sen_waveDir){
+         if(sen_chainVitality<=InpChainExitBelow){ trade.PositionClose(tk); continue; }
+         if(sen_narrState=="WEAKENING" && !sen_converging){
+            double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
+            bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
+            if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
+         }
+      }
 
       //--- partial close at TP1 ---
       if(InpUsePartial && mi>=0 && !gMgPartialDone[mi] && !naf(gMgTP1[mi])){

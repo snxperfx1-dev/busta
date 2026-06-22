@@ -428,7 +428,7 @@ void ComputeSE(const ENUM_TIMEFRAMES tfReq, const int bars,
    double lastP=NA,prevP=NA; int lastD=0,prevD=0;
    int    dir=0; double ftv=NA,fbv=NA,p4h=NA,p4l=NA,inv=NA,tgt=NA,cycH=NA,cycL=NA;
    bool   bos1=false,bos2=false; double protSw=NA,protSw2=NA,indOrig=NA,indExt=NA; bool indBrk=false;
-   int    lastDirSeen=0; int phaseState=0;
+   int    lastDirSeen=0; int phaseState=0; int recBrk=0; bool recArm=true;
 
    for(int j=0;j<n;j++){
       O.t[j]=d.t[j];
@@ -507,29 +507,46 @@ void ComputeSE(const ENUM_TIMEFRAMES tfReq, const int bars,
       bool physTransfer   =convScore>48.0 || absScore>40.0;
       bool physCapacityLow=absScore>45.0 || eff<effT*0.6;
 
+      //--- v60 wave geometry + compression / recursion / dominance ---
+      int wdir = !naf(inv)?(cl>inv?1:(cl<inv?-1:dir)):dir;
+      bool atFlip=!naf(ftv)&&!naf(fbv)&&cl<=ftv&&cl>=fbv;
+      bool expanding=momExpStrong||eLong||eShort||(wdir==1?bullImp:bearImp);
+      bool atExtreme=wdir==1?hi>=nz(cycH,hi):(wdir==-1?lo<=nz(cycL,lo):false);
+      double extr=wdir==1?nz(cycH,cl):nz(cycL,cl);
+      bool extended=!naf(inv)&&MathAbs(extr-inv)>A*1.5;
+      double fzMid=(!naf(ftv)&&!naf(fbv))?(ftv+fbv)/2.0:NA;
+      double retrFrac=(!naf(fzMid)&&MathAbs(extr-fzMid)>1e-10)?MathAbs(extr-cl)/MathAbs(extr-fzMid):0.0;
+      double compIdx=fmin2(100.0,fmax2(0.0,(1.0-fmin2(disp/fmax2(dispT,1e-10),1.0))*60.0+(1.0-fmin2(eff/fmax2(effT,1e-10),1.0))*40.0));
+      bool phase2CH=(dir==1&&bearCH)||(dir==-1&&bullCH);
+      if(reset||(atExtreme&&extended)){ recBrk=0; recArm=true; }
+      if((dir==1&&!naf(pH))||(dir==-1&&!naf(pL))) recArm=true;
+      if((phase2CH||oppBOS)&&recArm&&!atExtreme){ recBrk++; recArm=false; }
+      double recDom=fmin2(100.0,fmax2(recBrk*(30.0-compIdx*0.15),retrFrac*80.0));
+      bool transferDone=recDom>=50.0;
+      //--- v60 single-latch 14-phase state machine ---
       if(reset) phaseState=0;
-      if(dir!=0){
-         bool expanding=momExpStrong||eLong||eShort||(dir==1?bullImp:bearImp);
-         if(phaseState<1 && expanding && !physTransfer && !physCapacityLow) phaseState=1;
-         if(phaseState<2 && bos1 && momDecaying && physConvexDevel) phaseState=2;
-         if(phaseState<3 && bos1 && momCounter && physTransfer) phaseState=3;
-         if(phaseState<4 && bos2 && (momDecaying||momCounter) && physTransfer) phaseState=4;
-         if(phaseState<5 && indBrk && momExpStrong && !physCapacityLow) phaseState=5;
-         if(phaseState>=5 && momExhaust && physCapacityLow) phaseState=7;
-         if(phaseState>=5 && momCounter && !momExhaust && physTransfer) phaseState=8;
+      if(dir!=0 && !reset){
+         if(phaseState==0 && expanding) phaseState=1;
+         if(phaseState==1 && !atExtreme && momDecaying && physConvexDevel) phaseState=2;
+         if(phaseState==2 && !atExtreme && momCounter && physTransfer) phaseState=3;
+         if(phaseState==3 && !atExtreme && (bos1||bos2||indBrk) && physTransfer) phaseState=4;
+         if(phaseState>=1 && phaseState<=7 && atExtreme && extended) phaseState=5;
+         if(phaseState==5 && !atExtreme && (recBrk>=1||momExhaust)) phaseState=7;
+         if(phaseState==7 && transferDone) phaseState=8;
+         if(phaseState==8 && atFlip) phaseState=9;
+         if(phaseState==9 && ((dir==1&&bullImp)||(dir==-1&&bearImp))) phaseState=10;
+         if(phaseState==10 && (oppBOS||physCapacityLow)) phaseState=11;
+         if(phaseState==11 && ((dir==1&&lo<fbv)||(dir==-1&&hi>ftv))) phaseState=12;
+         if(phaseState==12 && ((dir==1&&bullCH)||(dir==-1&&bearCH))) phaseState=13;
       }
-      int phase=phaseState;
-      if(dir!=0){
-         if(momExhaust && physCapacityLow) phase=7;
-         else if(momCounter && physTransfer) phase=(phaseState>=5)?((convScore>40.0)?10:(momDecaying?9:8)):(bos2?4:3);
-         else if(momExpStrong) phase=(phaseState>=5)?phaseState:((bos2&&physTransfer)?4:((bos1&&physConvexDevel)?2:1));
-         else if(momDecaying) phase=(phaseState>=5)?phaseState:4;
-         else if(phaseState==0) phase=1;
-         else phase=phaseState;
-      }
-      if(phase==5 && dir==-1) phase=6;
-
-      double wp = phaseState==0?10.0: phaseState==1?25.0: phaseState==2?40.0: phaseState==3?55.0: phaseState==4?68.0: phaseState==5?80.0: phaseState==7?92.0:85.0;
+      //--- map v60 code -> Letra canonical code so Letra's combiner is unchanged ---
+      //  v60: 7 Transition->Absorption, 9 HTF Flip->Retr Pre-Cvx, 10 Induction->Retr Induction,
+      //       11 Liquidation/12 Terminal->Retr Liquidity, 13/14 Return->Demand/Supply Return.
+      int v60c=phaseState;
+      if(v60c==5 && dir==-1) v60c=6;
+      if(v60c==13 && dir==-1) v60c=14;
+      int phase = (v60c>=1&&v60c<=6)?v60c : v60c==7?7 : v60c==8?8 : v60c==9?9 : v60c==10?10 : (v60c==11||v60c==12)?11 : v60c==13?12 : v60c==14?13 : 0;
+      double wp = phaseState==0?5.0:phaseState==1?15.0:phaseState==2?25.0:phaseState==3?33.0:phaseState==4?42.0:phaseState==5?55.0:phaseState==7?65.0:phaseState==8?75.0:phaseState==9?85.0:phaseState==10?90.0:phaseState==11?94.0:phaseState==12?97.0:100.0;
       double cm = fmin2(convScore,100.0);
       double mf = fmin2(fmax2(expScore,fmax2(absScore,convScore))*0.70 + (dir!=0?30.0:0.0),100.0);
       double frzS=fmin2((eLong||eShort?50.0:0.0)+expScore*0.30+convScore*0.20,100.0);
