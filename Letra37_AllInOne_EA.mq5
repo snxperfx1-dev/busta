@@ -2961,8 +2961,6 @@ input bool          InpExitOnPhaseFlip  = false;        // Close on Absorption/R
 input int           InpMinHoldBars      = 5;            // Min bars to hold before ANY discretionary exit (SL/TP always active)
 input bool          InpHoldWithThesis   = true;         // HOLD a bias-aligned trade through opposite signals while the thesis still supports it
 input bool          InpExitOnThesisFlip = true;         // CLOSE an open trade when the dominant thesis flips against it (keeps the position matching the panel)
-input int           InpReentryCooldownBars = 12;        // Min bars between entries - stops over-trading every wiggle (ride the curve)
-input bool          InpOnePerCurve      = true;         // Only ONE entry per curve: no re-entry same direction until the curve resets (DEAD/new leg)
 
 input group "Letra37 EA - Session / Guards"
 input bool          InpUseSession       = false;        // Restrict trading hours (server time)
@@ -3019,9 +3017,6 @@ double   gDayStartEquity= 0.0;
 int      gTradesToday   = 0;
 bool     gHalted        = false;
 string   gEntryBlock    = "-";   // live reason the EA is NOT entering (shown in panel)
-datetime gLastEntryTime = 0;     // time of the last entry (re-entry cooldown)
-double   gLastFuTip     = 0.0;   // FU node we last entered on (don't re-trade the same node)
-int      gLastEntryDir  = 0;     // direction of the last entry (block same-curve re-pile-on)
 
 //--- chart-TF rates for the engine ---
 datetime eaT[]; double eaO[],eaH[],eaL[],eaC[],eaVol[];
@@ -3396,20 +3391,6 @@ void TryEnter()
       int cb=ConsensusBias();
       if(cb!=0 && dir!=cb){ gEntryBlock=(dir==1?"long":"short")+" vetoed vs "+(cb==1?"BULL":"BEAR")+" thesis"; return; }
    }
-   //--- RE-ENTRY DISCIPLINE: ride the curve, don't re-fire on every wiggle ---
-   if(InpReentryCooldownBars>0 && gLastEntryTime>0){
-      int barsSince=(int)((TimeCurrent()-gLastEntryTime)/MathMax(PeriodSeconds(_Period),1));
-      if(barsSince<InpReentryCooldownBars){ gEntryBlock="cooldown "+IntegerToString(InpReentryCooldownBars-barsSince)+"b"; return; }
-   }
-   //--- one entry per curve: block a repeat same-direction entry until the curve has died/reset ---
-   if(InpOnePerCurve && dir==gLastEntryDir && gLastEntryDir!=0 && StringFind(ctx_alive,"DEAD")<0){
-      gEntryBlock="one-per-curve (await curve reset)"; return;
-   }
-   //--- don't re-trade the exact same FU node we already took ---
-   if(fuEntry && gLastFuTip>0.0){
-      double aTip=cur_atr; if(aTip<=0) aTip=10*_Point;
-      if(MathAbs(ctx_fuTip-gLastFuTip)<aTip*0.25){ gEntryBlock="same FU node already traded"; return; }
-   }
    if(!aggressive){
       if(!PassesFilters(dir)) return;          // strict Letra path keeps full filters
    } else {
@@ -3477,9 +3458,6 @@ void TryEnter()
    if(ok){
       gTradesToday++;
       gEntryBlock="ENTERED "+_trig;
-      gLastEntryTime=TimeCurrent();          // start re-entry cooldown
-      gLastEntryDir =dir;                     // remember curve direction
-      if(fuEntry) gLastFuTip=ctx_fuTip;       // remember the FU node we took
       ulong tk=trade.ResultOrder();
       // register live position (market entries fill immediately)
       if(posinfo.SelectByTicket(trade.ResultDeal())) {}
