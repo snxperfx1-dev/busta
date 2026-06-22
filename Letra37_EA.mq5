@@ -124,6 +124,7 @@ input bool   InpAggReqNet       = true;    // Aggressive: require network bias t
 input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
 input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the indicator's extreme) - stop beyond the wick tip
 input bool   InpFURequireBias   = true;    // FU: only take a node that AGREES with the dominant bias (DOE+network+wave) - stops fading reversals
+input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
@@ -374,10 +375,15 @@ int DesiredDirection()
 int ConsensusBias()
 {
    int v=0;
-   if(cur_doeAction=="Long")  v+=2; else if(cur_doeAction=="Short") v-=2;   // DOE = decision authority
+   if(cur_doeAction=="Long")  v+=2; else if(cur_doeAction=="Short") v-=2;   // DOE action = decision authority
    if(StringFind(cur_doeBias,"Bull")>=0) v+=1; else if(StringFind(cur_doeBias,"Bear")>=0) v-=1;
-   v += ctx_netBias;        // Invisible Network bias (-1/0/+1)
-   v += ctx_waveDir;        // canonical wave direction (-1/0/+1)
+   //--- command narrative = the thesis shown on the panel ("Bullish/Bearish ... developing") ---
+   if(StringFind(cur_cmdNarrative,"invalidated")<0){
+      if(StringFind(cur_cmdNarrative,"Bull")>=0) v+=2; else if(StringFind(cur_cmdNarrative,"Bear")>=0) v-=2;
+   }
+   v += ctx_netBias;                               // Invisible Network bias (-1/0/+1)
+   v += ctx_waveDir;                               // canonical wave direction (-1/0/+1)
+   if(ctx_stackDir>0) v+=1; else if(ctx_stackDir<0) v-=1;   // v60 fractal stack
    if(v>0) return(1);
    if(v<0) return(-1);
    return(0);
@@ -505,6 +511,12 @@ void TryEnter()
       if(ok){ dir=adir; aggressive=true; }
    }
    if(dir==0){ gEntryBlock=(InpUseV60Context&&InpAggressiveEntry)?"no signal / v60 not aligned":"no signal (awaiting Return)"; return; }
+   //--- UNIFIED counter-bias veto: never trade against the dominant thesis (covers arrows, DOE, aggressive, FU).
+   //--- This is what stops shorts while "Bullish reversal developing" is on the panel. ---
+   if(InpBlockCounterBias){
+      int cb=ConsensusBias();
+      if(cb!=0 && dir!=cb){ gEntryBlock=(dir==1?"long":"short")+" vetoed vs "+(cb==1?"BULL":"BEAR")+" thesis"; return; }
+   }
    if(!aggressive){
       if(!PassesFilters(dir)) return;          // strict Letra path keeps full filters
    } else {
