@@ -468,10 +468,10 @@ void ComputeSE(const ENUM_TIMEFRAMES tfReq, const int bars,
       bool spawn=(eLong||eShort||flipUp||flipDn) && (!hasCtx||isRev);
       if(spawn){
          int nd = eLong?1: eShort?-1: flipUp?1:-1;
-         double obT = nd==1?lastP:prevP;
-         double obB = nd==1?prevP:lastP;
+         double _hi=fmax2(lastP,prevP), _lo=fmin2(lastP,prevP);  // v60 DIR-FIX: order OB by price, not pivot recency
+         double obT=_hi, obB=_lo;
          dir=nd; ftv=obT; fbv=obB; p4h=obT; p4l=obB; cycH=hi; cycL=lo;
-         inv = nd==1?obB:obT;
+         inv = nd==1?_lo:_hi;                                     // invalidation pinned to the protective extreme
          double rng=(!naf(prSH)&&!naf(prSL))?MathAbs(prSH-prSL):A*5.0;
          tgt = nd==1? nz(obT,cl)+rng : nz(obB,cl)-rng;
       }
