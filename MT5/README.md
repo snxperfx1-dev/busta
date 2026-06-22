@@ -26,12 +26,15 @@ authority (no Senseei meta-layer).
   timeframe instead of collapsing to the chart above H1 (fixes the pinned
   fractal-score bug); the multi-timeframe read stays honest on any chart.
 
-## How the pieces are wired
-- The **Letra decision layer** (physics, beliefs, scoring, Bayesian probability,
-  edge/slippage, execution lock, belief entries, ERF gate) remains the entry
-  trigger, now fed by the 14-phase engine.
-- **F72 curve-life** manages open trades: `DEAD` closes (optionally flips),
-  `WEAKENING` tightens the stop, `ALIVE` can hold through a premature engine exit.
+## How the pieces are wired (authority hierarchy)
+- The **Letra execution/decision layer** (physics, beliefs, scoring, Bayesian
+  probability, edge/slippage, execution lock, belief entries, ERF gate, and its
+  `exitNow`) is the **precise authority for entries AND exits**. The 14-phase
+  engine feeds this layer as its lifecycle input.
+- **F72 curve-life** is a **subordinate management assist**: `DEAD` abandons early
+  (protective), `WEAKENING` tightens the stop. It never enters against Letra, and
+  by default it does **not** hold a position open against a Letra exit
+  (`InpLifeAliveHold` is off).
 - The **Network** is optional confluence: `netBias` can gate entries and the
   attractor can be used as the take-profit magnet (both off by default to keep the
   Letra layer precise).

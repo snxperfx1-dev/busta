@@ -13,6 +13,17 @@
 //|     The Letra decision layer (Bayesian / edge / belief entries)  |
 //|     is kept as the entry authority — no Senseei meta-layer.      |
 //|                                                                  |
+//|  AUTHORITY HIERARCHY:                                            |
+//|    1. Letra execution/decision layer (buy/sell edge, grade,      |
+//|       Bayesian prob, execution lock, belief entries + exitNow)   |
+//|       is the PRECISE AUTHORITY for entries and exits.            |
+//|    2. The 14-phase structure engine FEEDS that layer (it is the  |
+//|       lifecycle input, not a separate decision maker).           |
+//|    3. F72 curve-life and the Invisible Network are SUBORDINATE   |
+//|       advisory inputs: they may abandon early / tighten / supply |
+//|       confluence, but never enter against Letra and never hold a |
+//|       position open against a Letra exit.                        |
+//|                                                                  |
 //|  INSTALL:                                                        |
 //|    - Copy  MT5/Include/Letra37 -> <Terminal>/MQL5/Include/        |
 //|    - Copy  MT5/Experts/Letra37 -> <Terminal>/MQL5/Experts/        |
@@ -98,13 +109,18 @@ input bool    InpNetBiasFilter    = false;  // Require netBias agreement for ent
 input bool    InpNetTarget        = false;  // Use network attractor as the take-profit magnet
 
 //====================== F72 CURVE-LIFE MANAGEMENT =================
-input string  GRPF           = "===== F72 Curve-Life Management ====="; // ---
-input bool    InpUseLifeMgmt      = true;   // Manage trades by curve-life (ALIVE/WEAKENING/DEAD)
-input bool    InpLifeDeadExit     = true;   // DEAD: close the position
-input bool    InpLifeFlip         = false;  // DEAD: also flip to the counter side
+// AUTHORITY: the Letra execution/decision layer (belief entries + edge/grade/
+// Bayesian + execution lock + exitNow) is the precise authority for ENTRIES and
+// EXITS. F72 curve-life is a SUBORDINATE management assist: it may abandon early
+// (DEAD) or tighten (WEAKENING), but it never enters against Letra and never holds
+// a position open against a Letra exit (AliveHold defaults OFF for that reason).
+input string  GRPF           = "===== F72 Curve-Life Management (subordinate to Letra) ====="; // ---
+input bool    InpUseLifeMgmt      = true;   // Use curve-life as a management assist
+input bool    InpLifeDeadExit     = true;   // DEAD: abandon (close) early — protective only
+input bool    InpLifeFlip         = false;  // DEAD: also flip (lets F72 enter; off = Letra-only entries)
 input bool    InpLifeWeakTighten  = true;   // WEAKENING: tighten the stop
 input double  InpLifeTightenAtr   = 1.0;    // WEAKENING tighten distance (ATR)
-input bool    InpLifeAliveHold    = true;   // ALIVE: ignore engine exit (let it run)
+input bool    InpLifeAliveHold    = false;  // ALIVE: ignore Letra exit (NOT recommended — overrides the authority)
 
 //====================== EXECUTION / RISK INPUTS ====================
 input string  GRPT           = "===== Trade Engine ====="; // ---
@@ -267,16 +283,7 @@ void OnTick()
 
    int posDir=g_trade.PositionDir();
 
-   //--- F72 DEAD: abandon the position (optionally flip) -----------
-   if(posDir!=0 && InpUseLifeMgmt && InpLifeDeadExit && g_brain.aliveVerdict=="DEAD")
-   {
-      g_trade.CloseAll();
-      posDir=0;
-      if(InpLifeFlip && g_brain.lifeTradeDir!=0)
-         OpenDir(g_brain.lifeTradeDir);
-   }
-
-   //--- engine exit (skipped while ALIVE if hold enabled) ----------
+   //--- LETRA EXIT (authority) — its exit signal always closes -----
    bool aliveHold=(InpUseLifeMgmt && InpLifeAliveHold && g_brain.aliveVerdict=="ALIVE");
    if(posDir!=0 && InpCloseOnExit && g_brain.exitNow && !aliveHold)
    {
@@ -284,7 +291,16 @@ void OnTick()
       posDir=0;
    }
 
-   //--- entry / reversal ------------------------------------------
+   //--- F72 abandon (subordinate assist) — protective early exit ---
+   if(posDir!=0 && InpUseLifeMgmt && InpLifeDeadExit && g_brain.aliveVerdict=="DEAD")
+   {
+      g_trade.CloseAll();
+      posDir=0;
+      if(InpLifeFlip && g_brain.lifeTradeDir!=0)   // off by default: keeps entries Letra-only
+         OpenDir(g_brain.lifeTradeDir);
+   }
+
+   //--- LETRA ENTRIES (authority) — Network is optional confluence --
    if(g_brain.longSignal && NetAgrees(1))
    {
       if(posDir==-1 && InpReverseOnSignal){ g_trade.CloseAll(); posDir=0; }
@@ -361,21 +377,21 @@ void DrawPanel()
       "% / Sell "+DoubleToString(g_brain.sellProb,0)+"%)\n";
    s+="Compression: "+DoubleToString(g_brain.compIdx,0)+"%   Recursion: "+IntegerToString(g_brain.recCount)+
       "   Dominance: "+DoubleToString(g_brain.domTransfer,0)+"%\n";
-   s+="── F72 CURVE LIFE ──\n";
+   s+="── F72 CURVE LIFE (advisory · subordinate) ──\n";
    s+="Trade Alive?  "+g_brain.aliveVerdict+"   (life "+DoubleToString(g_brain.lifeScore,0)+")\n";
    s+="Force: "+g_brain.cpState+"   Narrative: "+g_brain.narrState+"\n";
    s+="Chain: "+g_brain.chainScope+"   HTF Threat: "+g_brain.htfThreat+"\n";
    s+="Curve trade dir: "+(g_brain.lifeTradeDir==1?"LONG":g_brain.lifeTradeDir==-1?"SHORT":"wait")+"\n";
    if(InpUseNetwork && g_netReady)
    {
-      s+="── INVISIBLE NETWORK ──\n";
+      s+="── INVISIBLE NETWORK (advisory) ──\n";
       s+="netBias: "+(g_net.netBias==1?"BULL":g_net.netBias==-1?"BEAR":"-")+
          "   Pressure: "+DoubleToString(g_net.pressure,0)+"  ("+IntegerToString(g_net.liveNodes)+" live)\n";
       s+="Attractor: "+(g_net.attractorPrice==DBL_MAX?"-":DoubleToString(g_net.attractorPrice,_Digits))+"\n";
       s+="FEZ: "+(g_net.fezLo==DBL_MAX?"-":DoubleToString(g_net.fezLo,_Digits))+" .. "+
          (g_net.fezHi==DBL_MAX?"-":DoubleToString(g_net.fezHi,_Digits))+"\n";
    }
-   s+="── EXECUTION ──\n";
+   s+="── LETRA EXECUTION (AUTHORITY) ──\n";
    s+="Signal: "+(g_brain.longSignal?"LONG":g_brain.shortSignal?"SHORT":g_brain.exitNow?"EXIT":"—")+"\n";
    s+="Position: "+(g_trade.PositionDir()==1?"LONG":g_trade.PositionDir()==-1?"SHORT":"flat")+
       (g_trade.halted?("  [HALTED: "+g_trade.haltReason+"]"):"")+"\n";
