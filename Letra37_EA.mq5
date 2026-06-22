@@ -128,6 +128,7 @@ input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the in
 input bool   InpFURequireBias   = true;    // FU: only take a node that AGREES with the dominant bias (DOE+network+wave) - stops fading reversals
 input bool   InpMultiTFEntry    = true;    // MULTI-TF: enter on a fresh Demand/Supply Return on ANY rung (M1/M3/M5/M15/H1/H4)
 input int    InpMinEntryRung     = 1;      // Lowest rung allowed for a multi-TF entry (1=M1 ... 6=H4)
+input double InpMinDomTransfer   = 45.0;   // Min dominance-transfer % to treat a Return as an ENTRY CYCLE (below = first strike, wait)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -509,8 +510,11 @@ void TryEnter()
       }
    }
    //--- MULTI-TF: a fresh Demand/Supply Return on ANY rung (M1..H4) — the EA sees every timeframe ---
+   //  Only a genuine ENTRY CYCLE (dominance transferred to the recursive wave) qualifies;
+   //  a first strike (low dominance) is skipped — the curve is still building.
    if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
-      dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true;
+      if(cur_mtfEntryDom>=InpMinDomTransfer){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
+      else gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
    if(dir==0 && InpUseV60Context && InpAggressiveEntry){
@@ -741,7 +745,8 @@ void ShowStatus()
    s+="Dest   : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
    s+="Pos    : "+IntegerToString(CountOwnPositions())+"   TradesToday "+IntegerToString(gTradesToday)+(gHalted?"  [HALTED]":"")+"\n";
    s+="Gate   : "+gEntryBlock+"\n";
-   s+="MTF    : "+(cur_mtfEntryFresh?("FRESH "+(cur_mtfEntryDir==1?"LONG ":"SHORT ")+cur_mtfEntryTF+" Return"):"M1 "+f_waveDirLabel(cur_dirM1)+" M5 "+f_waveDirLabel(cur_dirM5)+" H1 "+f_waveDirLabel(cur_dirH1)+" H4 "+f_waveDirLabel(cur_dirH4))+"\n";
+   s+="Curve  : own "+cur_curveOwner+" "+f_waveDirLabel(cur_ownerDir)+"  "+cur_transState+"  ["+cur_entryReady+"]\n";
+   s+="Recur  : dom "+R0(cur_domTransfer)+"%  comp "+cur_compRegime+"  depth "+IntegerToString(cur_recDepth)+(cur_mtfEntryFresh?("  | RET "+cur_mtfEntryTF+" "+(cur_mtfEntryDir==1?"L":"S")+" dom "+R0(cur_mtfEntryDom)+"%"):"")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";

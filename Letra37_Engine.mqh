@@ -392,7 +392,7 @@ struct SEOut
    datetime t[];
    int    n;
    double dir[], ph[], sh[], sl[], psh[], psl[], bos[], ch[];
-   double p4h[], p4l[], inv[], tgt[], ft[], fb[], fs[], wp[], cm[], mf[];
+   double p4h[], p4l[], inv[], tgt[], ft[], fb[], fs[], wp[], cm[], mf[], dom[], comp[], rec[];
 };
 
 void ComputeSE(const ENUM_TIMEFRAMES tfReq, const int bars,
@@ -421,7 +421,7 @@ void ComputeSE(const ENUM_TIMEFRAMES tfReq, const int bars,
    ArrayResize(O.psh,n); ArrayResize(O.psl,n); ArrayResize(O.bos,n); ArrayResize(O.ch,n);
    ArrayResize(O.p4h,n); ArrayResize(O.p4l,n); ArrayResize(O.inv,n); ArrayResize(O.tgt,n);
    ArrayResize(O.ft,n);  ArrayResize(O.fb,n);  ArrayResize(O.fs,n);  ArrayResize(O.wp,n);
-   ArrayResize(O.cm,n);  ArrayResize(O.mf,n);
+   ArrayResize(O.cm,n);  ArrayResize(O.mf,n);  ArrayResize(O.dom,n); ArrayResize(O.comp,n); ArrayResize(O.rec,n);
 
    //--- state (var) ---
    double curSH=NA,curSL=NA,prSH=NA,prSL=NA;
@@ -556,6 +556,7 @@ void ComputeSE(const ENUM_TIMEFRAMES tfReq, const int bars,
       O.psh[j]=prSH; O.psl[j]=prSL; O.bos[j]=bosOut; O.ch[j]=chOut;
       O.p4h[j]=p4h; O.p4l[j]=p4l; O.inv[j]=inv; O.tgt[j]=tgt;
       O.ft[j]=ftv; O.fb[j]=fbv; O.fs[j]=frzS; O.wp[j]=wp; O.cm[j]=cm; O.mf[j]=mf;
+      O.dom[j]=recDom; O.comp[j]=compIdx; O.rec[j]=(double)recBrk;   // dominance transfer % / compression / recursion depth
    }
 }
 
@@ -947,6 +948,15 @@ bool   cur_mtfEntryFresh=false;// the Return just formed on this bar (transition
 int    cur_mtfEntryWt=0;       // rung weight (1=M1 ... 6=H4)
 double cur_mtfEntryInv=NA;     // that rung's invalidation level (for the stop)
 string cur_mtfEntryTF="-";     // which timeframe presented it
+double cur_mtfEntryDom=0.0;    // dominance-transfer % of the entry rung (first-strike vs entry-cycle)
+//--- CURVE OWNERSHIP CONTEXT (F72): the map the EA builds before any entry ---
+string cur_curveOwner="-";     // rung that owns price (highest mid-progress curve)
+int    cur_ownerDir=0;         // owner curve direction
+string cur_transState="-";     // BUILDING / TRANSITION / COMPLETE / APPROACHING FLIP / TERMINAL / ENTRY
+string cur_compRegime="-";     // Low / Medium / High / Extreme (compression near terminal)
+int    cur_recDepth=0;         // recursion count on the owner curve
+double cur_domTransfer=0.0;    // owner curve dominance transfer %
+string cur_entryReady="Not Ready"; // Not Ready / Early / Building / Pre-entry / Entry Active / Terminal
 //--- prev-bar phase code per rung (persist across recomputes; NOT reset by ResetState) ---
 int    gPrevPhM1=-1,gPrevPhM3=-1,gPrevPhM5=-1,gPrevPhM15=-1,gPrevPhH1=-1,gPrevPhH4=-1;
 string cur_l0phase,cur_l1phase,cur_l2phase,cur_l3phase,cur_l4phase;
@@ -2100,33 +2110,69 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
    if(isLast){
       cur_ie1aPhase=ie1a_currentPhase; cur_currentDisplayPhase=currentDisplayPhase; cur_hypFamily=ie1a_hypFamily;
       cur_dirM1=m1_dir; cur_dirM3=l3_dir; cur_dirM5=l0_dir; cur_dirM15=l1_dir; cur_dirH1=l2_dir; cur_dirH4=l4_dir;
-      //--- MULTI-TIMEFRAME ENTRY SCANNER -------------------------------------
-      //  The EA sees ALL six rungs. A fresh Demand Return (phase code 13 -> long)
-      //  or Supply Return (code 14 -> short) on ANY rung is an entry trigger.
-      //  We pick the freshest, highest-authority rung; the thesis veto in the EA
-      //  still decides whether to actually take it. Phase persists once latched,
-      //  so we only fire on the bar it FIRST appears (transition vs prev bar).
+      //--- MULTI-TIMEFRAME CURVE-OWNERSHIP + ENTRY SCANNER (F72) ------------
+      //  Build context across ALL rungs FIRST, then qualify entries.
+      //  Phase codes (this engine): 12 = Demand Return (LONG), 13 = Supply Return (SHORT).
+      //  A Return is only an ENTRY CYCLE (not a first strike) once dominance has
+      //  TRANSFERRED to the recursive wave (recDom high) - that is the build-vs-entry
+      //  distinction. We also publish curve ownership / transition state / compression.
       {
          int    _phc[6]; double _inv[6]; int _wt[6]; string _tfn[6]; int _prev[6];
+         double _dm[6]; double _cmp[6]; double _wpp[6]; double _rcc[6]; int _dr[6];
          _phc[0]=(int)nz(se1_ph);   _inv[0]=se1_inv;   _wt[0]=1; _tfn[0]="M1";  _prev[0]=gPrevPhM1;
          _phc[1]=(int)nz(se3_ph);   _inv[1]=se3_inv;   _wt[1]=2; _tfn[1]="M3";  _prev[1]=gPrevPhM3;
          _phc[2]=(int)nz(se5_ph);   _inv[2]=se5_inv;   _wt[2]=3; _tfn[2]="M5";  _prev[2]=gPrevPhM5;
          _phc[3]=(int)nz(se15_ph);  _inv[3]=se15_inv;  _wt[3]=4; _tfn[3]="M15"; _prev[3]=gPrevPhM15;
          _phc[4]=(int)nz(se60_ph);  _inv[4]=se60_inv;  _wt[4]=5; _tfn[4]="H1";  _prev[4]=gPrevPhH1;
          _phc[5]=(int)nz(se240_ph); _inv[5]=se240_inv; _wt[5]=6; _tfn[5]="H4";  _prev[5]=gPrevPhH4;
-         cur_mtfEntryDir=0; cur_mtfEntryFresh=false; cur_mtfEntryWt=0; cur_mtfEntryInv=NA; cur_mtfEntryTF="-";
+         _dm[0]=nz(MapVal(se1.t,se1.dom,se1.n,ct));    _cmp[0]=nz(MapVal(se1.t,se1.comp,se1.n,ct));    _wpp[0]=nz(MapVal(se1.t,se1.wp,se1.n,ct));    _rcc[0]=nz(MapVal(se1.t,se1.rec,se1.n,ct));    _dr[0]=m1_dir;
+         _dm[1]=nz(MapVal(se3.t,se3.dom,se3.n,ct));    _cmp[1]=nz(MapVal(se3.t,se3.comp,se3.n,ct));    _wpp[1]=nz(MapVal(se3.t,se3.wp,se3.n,ct));    _rcc[1]=nz(MapVal(se3.t,se3.rec,se3.n,ct));    _dr[1]=l3_dir;
+         _dm[2]=nz(MapVal(se5.t,se5.dom,se5.n,ct));    _cmp[2]=nz(MapVal(se5.t,se5.comp,se5.n,ct));    _wpp[2]=nz(MapVal(se5.t,se5.wp,se5.n,ct));    _rcc[2]=nz(MapVal(se5.t,se5.rec,se5.n,ct));    _dr[2]=l0_dir;
+         _dm[3]=nz(MapVal(se15.t,se15.dom,se15.n,ct)); _cmp[3]=nz(MapVal(se15.t,se15.comp,se15.n,ct)); _wpp[3]=nz(MapVal(se15.t,se15.wp,se15.n,ct)); _rcc[3]=nz(MapVal(se15.t,se15.rec,se15.n,ct)); _dr[3]=l1_dir;
+         _dm[4]=nz(MapVal(se60.t,se60.dom,se60.n,ct)); _cmp[4]=nz(MapVal(se60.t,se60.comp,se60.n,ct)); _wpp[4]=nz(MapVal(se60.t,se60.wp,se60.n,ct)); _rcc[4]=nz(MapVal(se60.t,se60.rec,se60.n,ct)); _dr[4]=l2_dir;
+         _dm[5]=nz(MapVal(se240.t,se240.dom,se240.n,ct));_cmp[5]=nz(MapVal(se240.t,se240.comp,se240.n,ct));_wpp[5]=nz(MapVal(se240.t,se240.wp,se240.n,ct));_rcc[5]=nz(MapVal(se240.t,se240.rec,se240.n,ct));_dr[5]=l4_dir;
+
+         //--- CURVE OWNER = highest rung that is mid-progress (wp in 10..90) = the live driver ---
+         int _own=-1;
+         for(int _r=5;_r>=0;_r--){ if(_wpp[_r]>10.0 && _wpp[_r]<90.0){ _own=_r; break; } }
+         if(_own<0) _own=2;                          // fallback to M5 canonical
+         cur_curveOwner=_tfn[_own]; cur_ownerDir=_dr[_own];
+         cur_domTransfer=_dm[_own]; cur_recDepth=(int)_rcc[_own];
+         double _oc=_cmp[_own];
+         cur_compRegime=_oc>=80.0?"Extreme":_oc>=55.0?"High":_oc>=30.0?"Medium":"Low";
+         int _opc=_phc[_own];
+         //--- transition / location state of the owner curve ---
+         if(_opc==0||_opc==1||_opc==5||_opc==6)                cur_transState="BUILDING";       // origin/expansion/new high-low
+         else if(_opc>=2 && _opc<=4)                            cur_transState="EXPANSION";
+         else if(_opc==7)                                       cur_transState=(_dm[_own]>=50.0?"TRANSITION COMPLETE":"TRANSITION");
+         else if(_opc==8)                                       cur_transState="RETRACEMENT";
+         else if(_opc==9)                                       cur_transState="APPROACHING FLIP";
+         else if(_opc>=10 && _opc<=11)                          cur_transState="TERMINAL";
+         else if(_opc==12||_opc==13)                            cur_transState="ENTRY (Return)";
+         else                                                   cur_transState="-";
+
+         //--- ENTRY SCAN: a FRESH Return (12/13) on any rung is a candidate ---
+         cur_mtfEntryDir=0; cur_mtfEntryFresh=false; cur_mtfEntryWt=0; cur_mtfEntryInv=NA; cur_mtfEntryTF="-"; cur_mtfEntryDom=0.0;
          int _bestWt=-1;
          for(int _r=0;_r<6;_r++){
             int _c=_phc[_r], _pc=_prev[_r];
-            bool _isRet =(_c==13||_c==14);
-            bool _wasRet=(_pc==13||_pc==14);
-            if(_isRet && !_wasRet && _wt[_r]>_bestWt){      // fresh transition into Return
+            bool _isRet =(_c==12||_c==13);
+            bool _wasRet=(_pc==12||_pc==13);
+            if(_isRet && !_wasRet && _wt[_r]>_bestWt){            // fresh transition into Return
                _bestWt=_wt[_r];
-               cur_mtfEntryDir=(_c==13?1:-1);
+               cur_mtfEntryDir=(_c==12?1:-1);                     // 12=Demand Return=LONG, 13=Supply Return=SHORT
                cur_mtfEntryFresh=true; cur_mtfEntryWt=_wt[_r];
                cur_mtfEntryInv=_inv[_r]; cur_mtfEntryTF=_tfn[_r];
+               cur_mtfEntryDom=_dm[_r];
             }
          }
+         //--- entry readiness (the build-vs-execute call) ---
+         if(cur_mtfEntryFresh)                                  cur_entryReady=(cur_mtfEntryDom>=50.0?"Entry Active":"Pre-entry");
+         else if(cur_transState=="TERMINAL"||cur_transState=="APPROACHING FLIP") cur_entryReady="Pre-entry";
+         else if(cur_transState=="TRANSITION COMPLETE"||cur_transState=="RETRACEMENT") cur_entryReady="Building";
+         else if(cur_transState=="TRANSITION")                  cur_entryReady="Early";
+         else                                                   cur_entryReady="Not Ready";
+
          gPrevPhM1=_phc[0]; gPrevPhM3=_phc[1]; gPrevPhM5=_phc[2];
          gPrevPhM15=_phc[3]; gPrevPhH1=_phc[4]; gPrevPhH4=_phc[5];
       }
