@@ -384,36 +384,6 @@ ENUM_TIMEFRAMES SafeTF(const ENUM_TIMEFRAMES req)
    return(req);
 }
 
-//------------------------------------------------------------------
-// ADAPTIVE WAVE-TIMEFRAME LADDER  (faithful port of v60 _wtf1.._wtf6)
-//   The six wave engines run on a CHART-RELATIVE ladder. Rung 3 IS the
-//   chart timeframe (the canonical wave / Engine 1A), so on an H1 chart
-//   the phases are H1 phases - not M5. Thresholds match Pine:
-//   3600=H1, 14400=H4, 86400=D, 604800=W.
-//------------------------------------------------------------------
-ENUM_TIMEFRAMES WaveLadderTF(const int rung)
-{
-   if(rung==3) return(_Period);                 // canonical wave = chart timeframe
-   int s=PeriodSeconds(_Period);
-   if(s<3600){                                  // sub-H1 charts (M1..M30)
-      switch(rung){ case 1: return(PERIOD_M1);  case 2: return(PERIOD_M3);
-                    case 4: return(PERIOD_M15); case 5: return(PERIOD_H1); case 6: return(PERIOD_H4); }
-   } else if(s<14400){                          // H1..below H4
-      switch(rung){ case 1: return(PERIOD_H1);  case 2: return(PERIOD_H2);
-                    case 4: return(PERIOD_H8);  case 5: return(PERIOD_H12); case 6: return(PERIOD_D1); }
-   } else if(s<86400){                          // H4..below D
-      switch(rung){ case 1: return(PERIOD_H4);  case 2: return(PERIOD_H8);
-                    case 4: return(PERIOD_D1);  case 5: return(PERIOD_D1);  case 6: return(PERIOD_D1); }
-   } else if(s<604800){                         // D..below W
-      switch(rung){ case 1: return(PERIOD_D1);  case 2: return(PERIOD_W1);
-                    case 4: return(PERIOD_W1);  case 5: return(PERIOD_W1);  case 6: return(PERIOD_MN1); }
-   } else {                                     // W+
-      switch(rung){ case 1: return(PERIOD_W1);  case 2: return(PERIOD_W1);
-                    case 4: return(PERIOD_MN1); case 5: return(PERIOD_MN1); case 6: return(PERIOD_MN1); }
-   }
-   return(_Period);
-}
-
 //==================================================================
 // STRUCTURE ENGINE  (f_se) — full 18-output state machine per TF
 //==================================================================
@@ -2350,13 +2320,13 @@ void ResetState()
 
 void BuildHTFEngines()
 {
-   ComputeSE(WaveLadderTF(1), HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se1);
-   ComputeSE(WaveLadderTF(2), HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se3);
-   ComputeSE(WaveLadderTF(3), HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se5);
-   ComputeSE(WaveLadderTF(4), HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se15);
-   ComputeSE(WaveLadderTF(5), HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se60);
-   ComputeSE(WaveLadderTF(6), HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se240);
-   ComputePhys(WaveLadderTF(3),HTF_BARS,atrLen,effLen,effThresh,dispThresh,convMult, phys5);   // physics on the chart wave (Pine _wtf3)
+   ComputeSE(PERIOD_M1, HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se1);
+   ComputeSE(PERIOD_M3, HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se3);
+   ComputeSE(PERIOD_M5, HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se5);
+   ComputeSE(PERIOD_M15,HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se15);
+   ComputeSE(PERIOD_H1, HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se60);
+   ComputeSE(PERIOD_H4, HTF_BARS, pivotLen,structLen,atrLen,effThresh,dispThresh,convMult,impulseAtrMult,chochBufferATR,effLen, se240);
+   ComputePhys(PERIOD_M5,HTF_BARS,atrLen,effLen,effThresh,dispThresh,convMult, phys5);
    ComputeBelief(tf1,HTF_BARS,atrLen,effThresh,dispThresh,convMult,obLookback, bel1);
    ComputeBelief(tf2,HTF_BARS,atrLen,effThresh,dispThresh,convMult,obLookback, bel2);
    ComputeM1(HTF_BARS,atrLen,effLen,effThresh,dispThresh,convMult, m1o);

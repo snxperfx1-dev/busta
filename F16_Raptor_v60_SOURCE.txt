@@ -1,3 +1,0 @@
-// Reference source pasted by user — F16 Raptor v60 / Master Senseei (Pine v6).
-// Used to verify the MQL5 port of the f_se phase machine + adaptive TF ladder.
-// (Full source stored for line-by-line comparison; not compiled.)
