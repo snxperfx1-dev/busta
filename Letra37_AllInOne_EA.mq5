@@ -2751,6 +2751,10 @@ bool   ctx_fuMerged=false;        // recursive curve respected the parent FU -> 
 int    ctx_termShifts=0;          // recursive change-of-character shifts counted inside the flip zone
 int    ctx_termExpected=4;        // expected shifts to complete the terminal sequence (compression-modulated)
 bool   ctx_termComplete=false;    // terminal entry cycle has matured (enough shifts done)
+//--- F72 Part 3: 61/70/78 manipulation band vs true induction at the lowest flip ---
+bool   ctx_inManipBand=false;     // price is in the 0.618-0.786 fib band (manipulation/displacement, NOT entry)
+double ctx_lowestFlip=NA;         // the lowest active on-bias flip = true S/D
+bool   ctx_atTrueInduction=false; // price is at the lowest flip (true induction zone = prime entry)
 //--- persistent terminal-counter state (updated once per bar) ---
 bool   g_termActive=false; int g_termShifts=0; int g_termPrevDirM5=0;
 //--- TIE detail ---
@@ -2891,6 +2895,7 @@ void ContextRun(const int bars)
    if(netBias==0) netBias=clL>emaC[last]?1:clL<emaC[last]?-1:0;
 
    int attrIdx=-1; double attrRank=-1; double fezHi=NA,fezLo=NA,fezHiA=0,fezLoA=0;
+   double lowFlipPx=NA;   // the LOWEST active on-bias flip (deepest support / highest resistance) = true S/D
    for(int i=0;i<ArraySize(sn_px);i++){
       int st=sn_state[i]; double a=f_authSen(i);
       if(st!=2 && a>=sIn_authMin){
@@ -2902,6 +2907,9 @@ void ContextRun(const int bars)
          if(onBias){ double rk=wt*1000.0+a; if(rk>attrRank){ attrRank=rk; attrIdx=i; } }
          if(np>clL && a>fezHiA){ fezHi=np; fezHiA=a; }
          if(np<clL && a>fezLoA){ fezLo=np; fezLoA=a; }
+         //--- lowest flip = the deepest demand below (bull) / highest supply above (bear) ---
+         if(netBias>=0 && nd==1 && np<clL && (naf(lowFlipPx)||np<lowFlipPx)) lowFlipPx=np;
+         if(netBias<=0 && nd==-1&& np>clL && (naf(lowFlipPx)||np>lowFlipPx)) lowFlipPx=np;
       }
    }
    double pressure=(bullAuth+bearAuth)>0?(bullAuth-bearAuth)/(bullAuth+bearAuth)*100.0:0.0;
@@ -3020,6 +3028,20 @@ void ContextRun(const int bars)
    }
    ctx_termShifts=g_termShifts; ctx_termExpected=_expShifts;
    ctx_termComplete=(ctx_atFlip && g_termShifts>=_expShifts);
+
+   //  Part 3 — manipulation band vs true induction. The 0.618/0.70/0.786 fib band of the
+   //  owner leg is where participants manipulate (displacement, NOT the entry). True induction
+   //  happens at the LOWEST flip (deepest demand / highest supply = true S/D). Entries align
+   //  to the true flip, not the manipulation wicks.
+   ctx_lowestFlip = lowFlipPx;
+   ctx_atTrueInduction = (!naf(lowFlipPx) && atrL>0 && MathAbs(clL-lowFlipPx)<=atrL*0.75);
+   ctx_inManipBand = false;
+   if(!naf(cExtreme) && !naf(c_inv) && cExtreme!=c_inv){
+      double _f618=cExtreme+0.618*(c_inv-cExtreme);
+      double _f786=cExtreme+0.786*(c_inv-cExtreme);
+      double _bLo=fmin2(_f618,_f786), _bHi=fmax2(_f618,_f786);
+      ctx_inManipBand = (clL>=_bLo && clL<=_bHi) && !ctx_atTrueInduction;   // in fib band but NOT at the true flip = manipulation
+   }
 
    //--- publish FEATURE outputs only (NO Senseei decision layer) ---
    ctx_fuFresh=fuFresh; ctx_fuDir=fuDir; ctx_fuTip=fuTip; ctx_fuMid=fuMid;
@@ -3146,6 +3168,8 @@ input double InpMinDomTransfer   = 45.0;   // Min dominance-transfer % to treat 
 input double InpMinEntryProb     = 0.0;    // Optional: min entry-cycle probability % to allow a multi-TF entry (0 = off)
 input bool   InpRequireAtFlip    = false;  // Optional: only take multi-TF entries when price is AT the HTF FU flip zone (terminal side)
 input int    InpMinTermShifts    = 0;      // Optional: at the flip zone, require N terminal shifts (Wyckoff ~4) before entering (0 = off)
+input bool   InpAvoidManipBand   = true;   // Skip entries in the 0.618-0.786 manipulation band (displacement trap) unless at true induction
+input bool   InpRequireTrueInduction = false; // Optional: only enter at the LOWEST flip (true S/D induction zone)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -3530,10 +3554,17 @@ void TryEnter()
    //  Only a genuine ENTRY CYCLE (dominance transferred to the recursive wave) qualifies;
    //  a first strike (low dominance) is skipped — the curve is still building.
    if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
-      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && (!InpRequireAtFlip || !InpUseV60Context || ctx_atFlip) && (InpMinTermShifts<=0 || !InpUseV60Context || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts)){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
+      bool _ctx=InpUseV60Context;
+      bool _okManip = (!InpAvoidManipBand || !_ctx || !ctx_inManipBand || ctx_atTrueInduction);
+      bool _okTrue  = (!InpRequireTrueInduction || !_ctx || ctx_atTrueInduction);
+      bool _okFlip  = (!InpRequireAtFlip || !_ctx || ctx_atFlip);
+      bool _okShift = (InpMinTermShifts<=0 || !_ctx || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts);
+      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && _okFlip && _okShift && _okManip && _okTrue){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
       else if(cur_mtfEntryDom<InpMinDomTransfer) gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
-      else if(InpRequireAtFlip && InpUseV60Context && !ctx_atFlip) gEntryBlock="not at flip zone ("+DoubleToString(ctx_distFlipAtr,1)+"ATR away)";
-      else if(InpMinTermShifts>0 && InpUseV60Context && ctx_atFlip && ctx_termShifts<InpMinTermShifts) gEntryBlock="terminal building "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(InpMinTermShifts)+" shifts";
+      else if(!_okManip) gEntryBlock="manipulation band (0.618-0.786, awaiting true flip)";
+      else if(!_okTrue)  gEntryBlock="not at true induction (lowest flip)";
+      else if(!_okFlip)  gEntryBlock="not at flip zone ("+DoubleToString(ctx_distFlipAtr,1)+"ATR away)";
+      else if(!_okShift) gEntryBlock="terminal building "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(InpMinTermShifts)+" shifts";
       else gEntryBlock="entry prob low "+IntegerToString((int)cur_entryProb)+"%";
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
@@ -3769,6 +3800,7 @@ void ShowStatus()
    s+="Recur  : dom "+R0(cur_domTransfer)+"%  comp "+cur_compRegime+"  depth "+IntegerToString(cur_recDepth)+"/"+IntegerToString(cur_expRecDepth)+(cur_mtfEntryFresh?("  | RET "+cur_mtfEntryTF+" "+(cur_mtfEntryDir==1?"L":"S")+" dom "+R0(cur_mtfEntryDom)+"%"):"")+"\n";
    s+="Cap    : budget "+R0(cur_curveBudget)+"%  toFlip "+DoubleToString(cur_distFlipAtr,1)+"ATR  entryP "+R0(cur_entryProb)+"%\n";
    if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_atFlip?("  shifts "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(ctx_termExpected)+(ctx_termComplete?" DONE":"")):"")+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
+   if(InpUseV60Context) s+="Induc  : "+(ctx_atTrueInduction?"TRUE INDUCTION (lowest flip "+PXs(ctx_lowestFlip)+")":ctx_inManipBand?"MANIPULATION band 0.618-0.786 (wait)":"-")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";
