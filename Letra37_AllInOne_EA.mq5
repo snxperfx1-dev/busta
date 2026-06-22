@@ -2960,6 +2960,7 @@ input bool          InpExitOnInvalid    = true;         // Close on engine inval
 input bool          InpExitOnPhaseFlip  = false;        // Close on Absorption/Retracement phase (off - was cutting too early)
 input int           InpMinHoldBars      = 5;            // Min bars to hold before ANY discretionary exit (SL/TP always active)
 input bool          InpHoldWithThesis   = true;         // HOLD a bias-aligned trade through opposite signals while the thesis still supports it
+input bool          InpExitOnThesisFlip = true;         // CLOSE an open trade when the dominant thesis flips against it (keeps the position matching the panel)
 
 input group "Letra37 EA - Session / Guards"
 input bool          InpUseSession       = false;        // Restrict trading hours (server time)
@@ -3505,6 +3506,9 @@ void ManagePositions()
       //--- while the dominant thesis still backs this trade, HOLD through opposite blips ---
       int  cbHold=ConsensusBias();
       bool thesisSupports=(InpHoldWithThesis && cbHold!=0 && cbHold==dir);
+      //--- THESIS FLIP: the panel's bias has turned against this open trade -> close it
+      //--- (this is what removes a lingering short while the panel now reads "Bullish ...", and vice versa) ---
+      if(canSoftExit && InpExitOnThesisFlip && cbHold!=0 && cbHold!=dir){ trade.PositionClose(tk); continue; }
       if(canSoftExit && !thesisSupports){
          if(InpExitOnInvalid && cur_invInvalidated){ trade.PositionClose(tk); continue; }
          if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
