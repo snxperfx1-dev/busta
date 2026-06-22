@@ -2751,10 +2751,14 @@ bool   ctx_fuMerged=false;        // recursive curve respected the parent FU -> 
 int    ctx_termShifts=0;          // recursive change-of-character shifts counted inside the flip zone
 int    ctx_termExpected=4;        // expected shifts to complete the terminal sequence (compression-modulated)
 bool   ctx_termComplete=false;    // terminal entry cycle has matured (enough shifts done)
+int    ctx_termM1Cycles=0;        // finer induction/liquidation sub-cycles on M1 inside the terminal
+//--- persistent M1 terminal sub-cycle state ---
+int    g_termPrevDirM1=0;
 //--- F72 Part 3: 61/70/78 manipulation band vs true induction at the lowest flip ---
 bool   ctx_inManipBand=false;     // price is in the 0.618-0.786 fib band (manipulation/displacement, NOT entry)
 double ctx_lowestFlip=NA;         // the lowest active on-bias flip = true S/D
 bool   ctx_atTrueInduction=false; // price is at the lowest flip (true induction zone = prime entry)
+bool   ctx_failureSwing=false;    // sweep beyond the true flip then reclaim in compression = spring (fast entry)
 //--- persistent terminal-counter state (updated once per bar) ---
 bool   g_termActive=false; int g_termShifts=0; int g_termPrevDirM5=0;
 //--- TIE detail ---
@@ -3021,13 +3025,18 @@ void ContextRun(const int bars)
    //  flip zone (the spring/test/LPS1/LPS2 - "always four"). Entry matures on the completing
    //  shift, not the first strike. Compression sets how many shifts to expect (tight -> fewer/faster).
    int _expShifts=(int)clamp(nz((double)cur_expRecDepth,3.0),2.0,4.0);
-   if(!ctx_atFlip){ g_termActive=false; g_termShifts=0; }
+   if(ctx_fuMerged) _expShifts=(int)MathMin(_expShifts+3,7);   // Principle 9: camp merged back -> cycle still owes ~3 more recursions
+   if(!ctx_atFlip){ g_termActive=false; g_termShifts=0; ctx_termM1Cycles=0; g_termPrevDirM1=cur_dirM1; }
    else {
-      if(!g_termActive){ g_termActive=true; g_termShifts=0; g_termPrevDirM5=cur_dirM5; }
-      if(cur_dirM5!=0 && cur_dirM5!=g_termPrevDirM5){ g_termShifts++; g_termPrevDirM5=cur_dirM5; }  // a CHoCH inside the zone = one shift
+      if(!g_termActive){ g_termActive=true; g_termShifts=0; g_termPrevDirM5=cur_dirM5; ctx_termM1Cycles=0; g_termPrevDirM1=cur_dirM1; }
+      if(cur_dirM5!=0 && cur_dirM5!=g_termPrevDirM5){ g_termShifts++; g_termPrevDirM5=cur_dirM5; }   // M5 CHoCH inside the zone = one shift
+      if(cur_dirM1!=0 && cur_dirM1!=g_termPrevDirM1){ ctx_termM1Cycles++; g_termPrevDirM1=cur_dirM1; } // finer M1 induction/liquidation sub-cycle
    }
    ctx_termShifts=g_termShifts; ctx_termExpected=_expShifts;
-   ctx_termComplete=(ctx_atFlip && g_termShifts>=_expShifts);
+   //  terminal completes when M5 shifts reach the expected count, OR (on a larger-TF owner where
+   //  the terminal only nests on M1) when the M1 sub-cycles reach ~2x the expected.
+   bool _htfOwner=(cur_curveOwner=="H1"||cur_curveOwner=="H4"||cur_curveOwner=="M15");
+   ctx_termComplete=(ctx_atFlip && (g_termShifts>=_expShifts || (_htfOwner && ctx_termM1Cycles>=2*_expShifts)));
 
    //  Part 3 — manipulation band vs true induction. The 0.618/0.70/0.786 fib band of the
    //  owner leg is where participants manipulate (displacement, NOT the entry). True induction
@@ -3035,6 +3044,12 @@ void ContextRun(const int bars)
    //  to the true flip, not the manipulation wicks.
    ctx_lowestFlip = lowFlipPx;
    ctx_atTrueInduction = (!naf(lowFlipPx) && atrL>0 && MathAbs(clL-lowFlipPx)<=atrL*0.75);
+   //  failure swing (spring): in High/Extreme compression price sweeps BEYOND the true flip
+   //  then reclaims it on the close - that IS the terminal spring, entry comes fast.
+   bool _comp=(cur_compRegime=="High"||cur_compRegime=="Extreme");
+   bool _fsL=(!naf(lowFlipPx)&&netBias>=0&&d.l[last]<lowFlipPx&&clL>lowFlipPx);
+   bool _fsS=(!naf(lowFlipPx)&&netBias<=0&&d.h[last]>lowFlipPx&&clL<lowFlipPx);
+   ctx_failureSwing=(ctx_atFlip && _comp && (_fsL||_fsS));
    ctx_inManipBand = false;
    if(!naf(cExtreme) && !naf(c_inv) && cExtreme!=c_inv){
       double _f618=cExtreme+0.618*(c_inv-cExtreme);
@@ -3541,6 +3556,11 @@ double ComputeTP(const int dir,const double entry,const double sl)
    if(InpTPMode==TP_NETWORK){
       // FU pool / Invisible-Network attractor — the magnet price is heading for
       tp = !naf(ctx_netTarget)?ctx_netTarget : !naf(ctx_attractorPx)?ctx_attractorPx : entry+(dir==1? risk*InpTPrr : -risk*InpTPrr);
+      //--- wide low-compression curve runs further -> project to the terminal (far FU flip) ---
+      if(InpCompSizing && InpUseV60Context && cur_compRegime=="Low"){
+         double far=(dir==1?ctx_fezHi:ctx_fezLo);
+         if(!naf(far) && ((dir==1&&far>tp)||(dir==-1&&far<tp))) tp=far;
+      }
    } else if(InpTPMode==TP_ATR){
       tp=entry+(dir==1? atr*InpTPAtrMult : -atr*InpTPAtrMult);
    } else {
@@ -3576,7 +3596,7 @@ void TryEnter()
       bool _okManip = (!InpAvoidManipBand || !_ctx || !ctx_inManipBand || ctx_atTrueInduction);
       bool _okTrue  = (!InpRequireTrueInduction || !_ctx || ctx_atTrueInduction);
       bool _okFlip  = (!InpRequireAtFlip || !_ctx || ctx_atFlip);
-      bool _okShift = (InpMinTermShifts<=0 || !_ctx || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts);
+      bool _okShift = (InpMinTermShifts<=0 || !_ctx || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts || ctx_failureSwing);
       if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && _okFlip && _okShift && _okManip && _okTrue){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
       else if(cur_mtfEntryDom<InpMinDomTransfer) gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
       else if(!_okManip) gEntryBlock="manipulation band (0.618-0.786, awaiting true flip)";
@@ -3821,8 +3841,8 @@ void ShowStatus()
    s+="Curve  : own "+cur_curveOwner+" "+f_waveDirLabel(cur_ownerDir)+"  "+cur_transState+"  ["+cur_entryReady+"]\n";
    s+="Recur  : dom "+R0(cur_domTransfer)+"%  comp "+cur_compRegime+"  depth "+IntegerToString(cur_recDepth)+"/"+IntegerToString(cur_expRecDepth)+(cur_mtfEntryFresh?("  | RET "+cur_mtfEntryTF+" "+(cur_mtfEntryDir==1?"L":"S")+" dom "+R0(cur_mtfEntryDom)+"%"):"")+"\n";
    s+="Cap    : budget "+R0(cur_curveBudget)+"%  toFlip "+DoubleToString(cur_distFlipAtr,1)+"ATR  entryP "+R0(cur_entryProb)+"%\n";
-   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_atFlip?("  shifts "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(ctx_termExpected)+(ctx_termComplete?" DONE":"")):"")+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
-   if(InpUseV60Context) s+="Induc  : "+(ctx_atTrueInduction?"TRUE INDUCTION (lowest flip "+PXs(ctx_lowestFlip)+")":ctx_inManipBand?"MANIPULATION band 0.618-0.786 (wait)":"-")+"\n";
+   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_atFlip?("  shifts "+IntegerToString(ctx_termShifts)+"/"+IntegerToString(ctx_termExpected)+" m1 "+IntegerToString(ctx_termM1Cycles)+(ctx_termComplete?" DONE":"")):"")+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
+   if(InpUseV60Context) s+="Induc  : "+(ctx_failureSwing?"FAILURE SWING (spring) - ":"")+(ctx_atTrueInduction?"TRUE INDUCTION (lowest flip "+PXs(ctx_lowestFlip)+")":ctx_inManipBand?"MANIPULATION band 0.618-0.786 (wait)":"-")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";
