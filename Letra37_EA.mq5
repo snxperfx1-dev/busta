@@ -369,22 +369,28 @@ int DesiredDirection()
    return(0);
 }
 
-//--- dominant directional consensus: DOE bias is the authority (weight 2),
-//--- the Invisible-Network bias and the wave direction confirm. Used to stop
-//--- the FU extreme entry from fading a developing reversal (e.g. selling into
-//--- an old supply node while the structure is turning bullish). 0 = no clear bias.
+//--- dominant directional consensus.
+//--- the DOMINANT thesis direction. The headline command narrative leads (it is what
+//--- the panel literally prints, e.g. "Bullish reversal developing"); the DOE decision
+//--- confirms; only if BOTH are neutral do we fall back to the structural consensus.
+//--- The lagging stack/pressure/wave do NOT get to cancel a clear thesis (they stay
+//--- bearish during a developing bullish reversal, which is exactly when we were
+//--- wrongly selling). 0 = no clear thesis.
 int ConsensusBias()
 {
-   int v=0;
-   if(cur_doeAction=="Long")  v+=2; else if(cur_doeAction=="Short") v-=2;   // DOE action = decision authority
-   if(StringFind(cur_doeBias,"Bull")>=0) v+=1; else if(StringFind(cur_doeBias,"Bear")>=0) v-=1;
-   //--- command narrative = the thesis shown on the panel ("Bullish/Bearish ... developing") ---
+   //--- 1) command narrative = the headline thesis on the panel ---
    if(StringFind(cur_cmdNarrative,"invalidated")<0){
-      if(StringFind(cur_cmdNarrative,"Bull")>=0) v+=2; else if(StringFind(cur_cmdNarrative,"Bear")>=0) v-=2;
+      if(StringFind(cur_cmdNarrative,"Bull")>=0) return(1);
+      if(StringFind(cur_cmdNarrative,"Bear")>=0) return(-1);
    }
-   v += ctx_netBias;                               // Invisible Network bias (-1/0/+1)
-   v += ctx_waveDir;                               // canonical wave direction (-1/0/+1)
-   if(ctx_stackDir>0) v+=1; else if(ctx_stackDir<0) v-=1;   // v60 fractal stack
+   //--- 2) DOE decision authority ---
+   if(cur_doeAction=="Long")  return(1);
+   if(cur_doeAction=="Short") return(-1);
+   if(StringFind(cur_doeBias,"Bull")>=0) return(1);
+   if(StringFind(cur_doeBias,"Bear")>=0) return(-1);
+   //--- 3) fallback: structural consensus (network + wave + stack) ---
+   int v=ctx_netBias+ctx_waveDir;
+   if(ctx_stackDir>0) v+=1; else if(ctx_stackDir<0) v-=1;
    if(v>0) return(1);
    if(v<0) return(-1);
    return(0);
