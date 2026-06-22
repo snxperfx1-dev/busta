@@ -37,6 +37,14 @@
 #include <Letra37/Letra37_Network.mqh>
 #include <Letra37/Letra37_Trade.mqh>
 
+//--- entry source selector -----------------------------------------
+enum ENUM_ENTRYMODE
+{
+   ENTRY_BELIEF = 0,   // belief-gated reversal arrows only (Section 21)
+   ENTRY_DOE    = 1,   // synthesized directional command only (net-edge PRESSURE)
+   ENTRY_BOTH   = 2    // take either (default)
+};
+
 //====================== ENGINE INPUTS (mirror Pine) ================
 input string  GRP0           = "===== Core ====="; // ---
 input int     InpPivotLen        = 5;       // Pivot Length
@@ -72,6 +80,8 @@ input bool    InpRequireLiqSweep  = true;   // Require Liquidity Sweep
 input int     InpLiqSweepLookback = 10;     // Sweep Lookback Bars
 
 input string  GRP5           = "===== Execution Logic ====="; // ---
+input ENUM_ENTRYMODE InpEntryMode = ENTRY_BOTH; // Entry source (belief arrows / DOE command / both)
+input double  InpDoeThreshold     = 25.0;   // DOE: net-edge PRESSURE threshold for command entry
 input int     InpBaseLockBars     = 10;     // Base Lock Bars After Entry
 input bool    InpRequireHTFAlign  = false;  // Require HTF Bias Alignment
 input double  InpExecThreshold    = 5.0;    // Net Edge Execution Threshold
@@ -213,6 +223,7 @@ int OnInit()
    g_bp.liqSweepLookback=InpLiqSweepLookback;
    g_bp.tf1=tf1; g_bp.tf2=tf2;
    g_bp.baseLockBars=InpBaseLockBars; g_bp.requireHTFAlign=InpRequireHTFAlign; g_bp.execThreshold=InpExecThreshold;
+   g_bp.doeThreshold=InpDoeThreshold;
    g_bp.beliefSmooth=InpBeliefSmooth; g_bp.confDecayRate=InpConfDecayRate;
    g_bp.erfReadyResW=InpErfResW; g_bp.erfReadyResidW=InpErfResidW; g_bp.erfReadyConfW=InpErfConfW;
    g_bp.erfEntryThreshold=InpErfEntryThresh; g_bp.erfGateEnabled=InpErfGateEnabled;
@@ -272,11 +283,12 @@ void OnTick()
    if(InpShowPanel) DrawPanel();
 
    if(InpVerbose)
-      PrintFormat("Letra37 | %s | dir=%d phase=%s grade=%s prob=%.0f edge=%.1f life=%.0f(%s) net=%d %s%s",
+      PrintFormat("Letra37 | %s | dir=%d phase=%s grade=%s prob=%.0f edge=%.1f life=%.0f(%s) net=%d%s%s%s%s",
                   TimeToString(g_brain.barTime),g_brain.outDir,g_brain.phase,g_brain.grade,
                   g_brain.finalProb,g_brain.netEdgeAdjusted,g_brain.lifeScore,g_brain.aliveVerdict,
                   (g_netReady?g_net.netBias:0),
-                  (g_brain.longSignal?" >>> LONG":""),(g_brain.shortSignal?" >>> SHORT":""));
+                  (g_brain.longSignal?" >>>BELIEF-LONG":""),(g_brain.shortSignal?" >>>BELIEF-SHORT":""),
+                  (g_brain.doeLong?" >>>DOE-LONG":""),(g_brain.doeShort?" >>>DOE-SHORT":""));
 
    if(!InpEnableTrading) return;
    if(g_trade.halted){ if(InpVerbose) Print("Letra37: halted — ",g_trade.haltReason); return; }
@@ -300,13 +312,17 @@ void OnTick()
          OpenDir(g_brain.lifeTradeDir);
    }
 
-   //--- LETRA ENTRIES (authority) — Network is optional confluence --
-   if(g_brain.longSignal && NetAgrees(1))
+   //--- LETRA ENTRIES (authority) — belief arrows and/or DOE command --
+   bool beliefOK=(InpEntryMode==ENTRY_BELIEF||InpEntryMode==ENTRY_BOTH);
+   bool doeOK   =(InpEntryMode==ENTRY_DOE   ||InpEntryMode==ENTRY_BOTH);
+   bool wantLong =(beliefOK&&g_brain.longSignal) ||(doeOK&&g_brain.doeLong);
+   bool wantShort=(beliefOK&&g_brain.shortSignal)||(doeOK&&g_brain.doeShort);
+   if(wantLong && NetAgrees(1))
    {
       if(posDir==-1 && InpReverseOnSignal){ g_trade.CloseAll(); posDir=0; }
       if(posDir==0) OpenDir(1);
    }
-   else if(g_brain.shortSignal && NetAgrees(-1))
+   else if(wantShort && NetAgrees(-1))
    {
       if(posDir==1 && InpReverseOnSignal){ g_trade.CloseAll(); posDir=0; }
       if(posDir==0) OpenDir(-1);
@@ -392,7 +408,10 @@ void DrawPanel()
          (g_net.fezHi==DBL_MAX?"-":DoubleToString(g_net.fezHi,_Digits))+"\n";
    }
    s+="── LETRA EXECUTION (AUTHORITY) ──\n";
-   s+="Signal: "+(g_brain.longSignal?"LONG":g_brain.shortSignal?"SHORT":g_brain.exitNow?"EXIT":"—")+"\n";
+   s+="Belief arrow: "+(g_brain.longSignal?"LONG":g_brain.shortSignal?"SHORT":"—")+
+      "   DOE command: "+(g_brain.doeLong?"LONG":g_brain.doeShort?"SHORT":"—")+"\n";
+   s+="Exit: "+(g_brain.exitNow?"YES":"-")+"   Mode: "+
+      (InpEntryMode==ENTRY_BELIEF?"belief":InpEntryMode==ENTRY_DOE?"DOE":"both")+"\n";
    s+="Position: "+(g_trade.PositionDir()==1?"LONG":g_trade.PositionDir()==-1?"SHORT":"flat")+
       (g_trade.halted?("  [HALTED: "+g_trade.haltReason+"]"):"")+"\n";
    Comment(s);

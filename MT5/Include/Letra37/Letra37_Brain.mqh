@@ -55,6 +55,7 @@ struct BrainParams
    int    baseLockBars;
    bool   requireHTFAlign;
    double execThreshold;
+   double doeThreshold;       // net-edge magnitude for a DOE (PRESSURE) command entry
    // Intelligence
    int    beliefSmooth;
    double confDecayRate;
@@ -88,8 +89,10 @@ public:
    //--- outputs (state of the most recent closed M5 bar) -----------
    bool     ready;
    datetime barTime;
-   bool     longSignal;
+   bool     longSignal;       // Section 21 belief-gated reversal arrow (precise)
    bool     shortSignal;
+   bool     doeLong;          // synthesized directional command (net-edge PRESSURE)
+   bool     doeShort;
    bool     exitNow;
    bool     exitLatchActive;
    int      outDir;           // active wave direction (gated)
@@ -293,7 +296,7 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
    double lifeSeq[]; ArrayResize(lifeSeq,0);
 
    // outputs for the final bar
-   bool fLong=false,fShort=false,fExit=false,fExitLatch=false;
+   bool fLong=false,fShort=false,fExit=false,fExitLatch=false; bool fDoeLong=false,fDoeShort=false;
    string fPhase="",fGrade="",fDirective="";
    double fFinalProb=0,fNetEdge=0,fBuyProb=0,fSellProb=0,fTarget=LNA,fInv=LNA,fFlipTop=LNA,fFlipBot=LNA,fAttr=LNA,fAtr=0;
    int fDir=0,fTradeDir=0,fStackDir=0,fHtfAlign=0; double fCtx=0,fLiq=0,fErf=0,fDRB=0;
@@ -813,8 +816,15 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
       bool beliefEntryShort=(direction==-1&&entryPhase=="Supply Return"&&demandReturnBelief>50&&expansionBelief<60&&absorptionBelief>25);
       bool longSignal=(beliefEntryLong&&htfAligned&&gradeOK&&!signalLocked&&!withinLongLock&&edgePassesFilter&&preConvOK_long&&inducOK_long&&structLongOK&&liqSweepOK&&obFresh&&htfLongOK&&erf_entryGate);
       bool shortSignal=(beliefEntryShort&&htfAligned&&gradeOK&&!signalLocked&&!withinShortLock&&edgePassesFilter&&preConvOK_short&&inducOK_short&&structShortOK&&liqSweepOK&&obFresh&&htfShortOK&&erf_entryGate);
-      if(longSignal){ lastSignalBar=i; lastLongBar=i; engineArmed=false; }
-      if(shortSignal){ lastSignalBar=i; lastShortBar=i; engineArmed=false; }
+      //--- DOE (Directional Opportunity Engine) — synthesized PRESSURE command.
+      // A continuation/pressure entry from the same Letra edge engine, gated by
+      // structure / HTF / grade / lock / OB / ERF but NOT the reversal-zone belief.
+      bool doeLong =(direction==1 &&netEdgeAdjusted>= P.doeThreshold&&gradeOK&&htfAligned&&!signalLocked&&!withinLongLock&&structLongOK&&htfLongOK&&obFresh&&erf_entryGate);
+      bool doeShort=(direction==-1&&netEdgeAdjusted<=-P.doeThreshold&&gradeOK&&htfAligned&&!signalLocked&&!withinShortLock&&structShortOK&&htfShortOK&&obFresh&&erf_entryGate);
+      bool firedLong =(longSignal||doeLong);
+      bool firedShort=(shortSignal||doeShort);
+      if(firedLong){ lastSignalBar=i; lastLongBar=i; engineArmed=false; }
+      if(firedShort){ lastSignalBar=i; lastShortBar=i; engineArmed=false; }
 
       //--- F72 CURVE-LIFE ("is the trade alive?") -----------------
       double se5_comp=se5[j5].comp; int se5_recN=se5[j5].rec; double se5_dom=se5[j5].dom;
@@ -883,8 +893,8 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
          (tradeDirV!=0&&!obFresh)||(tradeDirV!=0&&safeToReset)||
          (tradeDirV==1&&bullInvalid)||(tradeDirV==-1&&bearInvalid)||
          (tradeDirV!=0&&(entryPhase=="Absorption"||entryPhase=="Retracement"));
-      if(longSignal){ tradeDirV=1; exitFiredBar=-1; }
-      else if(shortSignal){ tradeDirV=-1; exitFiredBar=-1; }
+      if(firedLong){ tradeDirV=1; exitFiredBar=-1; }
+      else if(firedShort){ tradeDirV=-1; exitFiredBar=-1; }
       else if(exitCondition&&tradeDirV!=0){ exitFiredBar=i; tradeDirV=0; }
       bool exitLatchActive=(exitFiredBar>=0&&(i-exitFiredBar)<3);
 
@@ -894,6 +904,7 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
       if(i==n-1)
       {
          fLong=longSignal; fShort=shortSignal; fExit=(exitCondition&&true); fExitLatch=exitLatchActive;
+         fDoeLong=doeLong; fDoeShort=doeShort;
          fPhase=entryPhase; fGrade=grade; fDirective=liveDirective;
          fFinalProb=finalProb; fNetEdge=netEdgeAdjusted; fBuyProb=buyProb; fSellProb=sellProb;
          fTarget=se5_tgt; fInv=se5_inv; fFlipTop=flipTop; fFlipBot=flipBot; fAttr=eae_primaryAttractorPrice; fAtr=atr;
@@ -908,6 +919,7 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
 
    //--- publish ----------------------------------------------------
    longSignal=fLong; shortSignal=fShort; exitNow=fExit; exitLatchActive=fExitLatch;
+   doeLong=fDoeLong; doeShort=fDoeShort;
    outDir=fDir; tradeDir=fTradeDir; atr=fAtr;
    outFlipTop=fFlipTop; outFlipBot=fFlipBot; target=fTarget; invalidation=fInv; attractorPrice=fAttr;
    phase=fPhase; grade=fGrade; finalProb=fFinalProb; netEdgeAdjusted=fNetEdge;

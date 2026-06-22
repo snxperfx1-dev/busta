@@ -31,6 +31,14 @@ authority (no Senseei meta-layer).
   probability, edge/slippage, execution lock, belief entries, ERF gate, and its
   `exitNow`) is the **precise authority for entries AND exits**. The 14-phase
   engine feeds this layer as its lifecycle input.
+- **Two complementary Letra entry types** (`InpEntryMode`, default **both**):
+  1. **Belief arrows** — the precise Section-21 reversal trigger that fires at the
+     Demand/Supply Return (belief-gated, with liquidity-sweep / pre-convexity /
+     induction confirmation).
+  2. **DOE command** — the synthesized directional opportunity (net-edge
+     "PRESSURE") entry: a continuation/pressure entry from the same Letra edge
+     engine, gated by structure / HTF / grade / lock / OB / ERF but not the
+     reversal-zone belief. Threshold = `InpDoeThreshold`.
 - **F72 curve-life** is a **subordinate management assist**: `DEAD` abandons early
   (protective), `WEAKENING` tightens the stop. It never enters against Letra, and
   by default it does **not** hold a position open against a Letra exit
