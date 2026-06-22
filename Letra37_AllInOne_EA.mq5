@@ -2924,7 +2924,8 @@ input int           InpTrailPoints      = 200;          // Trail distance (point
 input int           InpTrailStepPoints  = 20;           // Min step to move trail (points)
 input bool          InpExitOnOpposite   = true;         // Close on opposite engine signal
 input bool          InpExitOnInvalid    = true;         // Close on engine invalidation
-input bool          InpExitOnPhaseFlip  = true;         // Close on Absorption/Retracement phase
+input bool          InpExitOnPhaseFlip  = false;        // Close on Absorption/Retracement phase (off - was cutting too early)
+input int           InpMinHoldBars      = 5;            // Min bars to hold before ANY discretionary exit (SL/TP always active)
 
 input group "Letra37 EA - Session / Guards"
 input bool          InpUseSession       = false;        // Restrict trading hours (server time)
@@ -3351,20 +3352,26 @@ void ManagePositions()
       double risk  =MathAbs(openP-initSL); if(risk<=0) risk=atr;
       double rMult =(dir==1?(mkt-openP):(openP-mkt))/risk;
 
-      //--- engine-driven exits ---
+      //--- bars this position has been open (gate discretionary exits) ---
+      int heldBars=(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/MathMax(PeriodSeconds(_Period),1));
+      bool canSoftExit=(heldBars>=InpMinHoldBars);
+      //--- always-on protective exits (broker SL/TP also always active) ---
       if(InpExitOnInvalid && cur_invInvalidated){ trade.PositionClose(tk); continue; }
-      if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
-      if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
       if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
-      //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
-      if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ trade.PositionClose(tk); continue; }
-      //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
-      if(InpUseV60Context && InpUseNarrativeMgmt && dir==ctx_waveDir){
-         if(ctx_chainVitality<=InpChainExitBelow){ trade.PositionClose(tk); continue; }
-         if(ctx_narrState=="WEAKENING" && !ctx_converging){
-            double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
-            bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
-            if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
+      //--- discretionary exits: only after the minimum hold (stops cutting straight away) ---
+      if(canSoftExit){
+         if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
+         if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
+         //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
+         if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ trade.PositionClose(tk); continue; }
+         //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
+         if(InpUseV60Context && InpUseNarrativeMgmt && dir==ctx_waveDir){
+            if(ctx_chainVitality<=InpChainExitBelow){ trade.PositionClose(tk); continue; }
+            if(ctx_narrState=="WEAKENING" && !ctx_converging){
+               double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
+               bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
+               if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
+            }
          }
       }
 
