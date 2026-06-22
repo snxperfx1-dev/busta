@@ -112,7 +112,7 @@ input double InpMinTimeAlign    = 55.0;    // Min TIE alignment %
 input bool   InpBlockV60Terminal= true;    // Block entry when v60 phase is Liquidation/Terminal against dir
 input bool   InpTIEBlockOpposed = true;    // TIE: block entry when a strongly-aligned cycle stack opposes
 input double InpTIEStrongAlign  = 60.0;    // TIE: "strong" cycle alignment threshold %
-input bool   InpAggressiveEntry = false;   // AGGRESSIVE: also enter on v60 confluence (network+curve+wave), bypassing strict Return/ERF gate
+input bool   InpAggressiveEntry = true;    // AGGRESSIVE: also enter on v60 confluence (network+curve+wave), bypassing strict Return/ERF gate
 input bool   InpAggReqNet       = true;    // Aggressive: require network bias to agree
 input bool   InpAggReqTime      = true;    // Aggressive: respect TIE-opposed block
 
