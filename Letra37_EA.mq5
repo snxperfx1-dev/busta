@@ -37,7 +37,7 @@ enum ENUM_MIN_GRADE  { G_APLUS, G_A, G_B, G_C, G_D };
 // EA INPUTS
 //==================================================================
 input group "Letra37 EA - Execution"
-input ENUM_SIG_SOURCE InpSignalSource   = SIG_BOTH;     // Signal source
+input ENUM_SIG_SOURCE InpSignalSource   = SIG_V72;      // Decision authority: V72=DOE/Command panel (recommended), ENGINE=raw arrows, BOTH=require both
 input bool   InpTradeLongs              = true;         // Allow long trades
 input bool   InpTradeShorts             = true;         // Allow short trades
 input bool   InpReverseOnOpposite       = false;        // Reverse position on opposite signal
