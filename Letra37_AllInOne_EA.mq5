@@ -22,9 +22,9 @@
 #include <Trade/SymbolInfo.mqh>
 #include <Trade/AccountInfo.mqh>
 
-//================================================================================
-//  ENGINE (inlined from Letra37_Engine.mqh)
-//================================================================================
+//===================================================================
+//  ENGINE  (from Letra37_Engine.mqh)
+//===================================================================
 //+------------------------------------------------------------------+
 //| Letra37_Engine.mqh                                               |
 //| Shared analytical engine for the Letra 37 port.                  |
@@ -2382,9 +2382,9 @@ void EngineRun(const int n,const datetime &time[],const double &open[],const dou
 }
 
 
-//================================================================================
-//  V60 CONTEXT (inlined from Letra37_Context.mqh)
-//================================================================================
+//===================================================================
+//  V60 CONTEXT  (from Letra37_Context.mqh)
+//===================================================================
 //+------------------------------------------------------------------+
 //| Letra37_Context.mqh                                              |
 //| Best-of-v60 ("F16 Raptor") FEATURE / CONTEXT layer for Letra,    |
@@ -2415,6 +2415,8 @@ input int    sIn_authMin     = 45;     // Min node authority
 input int    sIn_nodeMax     = 250;    // Max remembered nodes
 input int    sIn_dormantBars = 120;    // Bars until dormant
 input int    sIn_historyBars = 600;    // Bars until historical
+input double sIn_tapAtr      = 0.40;   // FU extreme: tap band (xATR) for return-to-node entry
+input int    sIn_tapMaxAge   = 60;     // FU extreme: max node age (bars) eligible for a tap entry
 
 //==================================================================
 // ADAPTIVE TIMEFRAME LADDER  (rung 3 = chart timeframe)
@@ -2851,12 +2853,25 @@ void ContextRun(const int bars)
    double mig50=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.5*(c_inv-cExtreme);
    double mig618=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.618*(c_inv-cExtreme);
 
-   //--- freshest FU node formed on the last closed bar = the indicator's extreme entry ---
+   //--- FU extreme entry node:  (a) a node that just VALIDATED on the last closed bar
+   //--- (the indicator printing a fresh circle at the extreme), OR
+   //--- (b) price RETURNING to / TAPPING a recent, valid, high-authority node
+   //--- (the indicator's circle being revisited — enter AT that extreme). ---
    bool fuFresh=false; int fuDir=0; double fuTip=NA, fuMid=NA; double fuAuth=-1.0;
+   double fuHi=d.h[last], fuLo=d.l[last]; double fuTap=atrL*sIn_tapAtr;
    for(int fi=0;fi<ArraySize(sn_px);fi++){
-      if(sn_bar[fi]==last && sn_state[fi]!=2){
-         double a=f_authSen(fi);
-         if(a>=sIn_authMin && a>fuAuth){ fuAuth=a; fuFresh=true; fuDir=sn_dir[fi]; fuTip=sn_px[fi]; fuMid=sn_mid[fi]; }
+      if(sn_state[fi]==2) continue;                         // skip invalidated nodes
+      double a=f_authSen(fi);
+      if(a<sIn_authMin) continue;
+      double np=sn_px[fi]; int nd=sn_dir[fi];
+      bool justFormed=(sn_bar[fi]==last);
+      // demand node (dir +1, sits below price): tapped when the bar low reaches it but close holds above
+      // supply node (dir -1, sits above price): tapped when the bar high reaches it but close holds below
+      bool tapped=(nd==1 ? (fuLo<=np+fuTap && clL>=np)
+                 : nd==-1? (fuHi>=np-fuTap && clL<=np) : false);
+      bool recent=((last-sn_bar[fi])<=sIn_tapMaxAge);
+      if((justFormed || (tapped && recent)) && nd!=0 && a>fuAuth){
+         fuAuth=a; fuFresh=true; fuDir=nd; fuTip=np; fuMid=sn_mid[fi];
       }
    }
 
@@ -2872,9 +2887,9 @@ void ContextRun(const int bars)
 }
 
 
-//================================================================================
-//  EXPERT ADVISOR (inlined from Letra37_EA.mq5)
-//================================================================================
+//===================================================================
+//  EXPERT ADVISOR  (from Letra37_EA.mq5)
+//===================================================================
 
 //==================================================================
 // EA INPUT ENUMS
@@ -2924,12 +2939,13 @@ input double        InpTPrr             = 2.0;          // TP = RR * risk (TP_RR
 input double        InpTPAtrMult        = 3.0;          // TP = ATR * mult (TP_ATR)
 input bool          InpUsePartial       = true;         // Partial close at first target
 input double        InpPartialPct       = 50.0;         // Partial close % at TP1
-input bool          InpMoveBEAfterTP1   = true;         // Move SL to BE after partial
+input bool          InpMoveBEAfterTP1   = false;        // Move SL to BE after partial (off - BE now uses 3R/900 rule)
 
 input group "Letra37 EA - Trade Management"
 input bool          InpUseBreakeven     = true;         // Enable break-even
-input double        InpBETriggerRR      = 1.0;          // BE trigger (in RR)
-input int           InpBEOffsetPoints   = 20;           // BE offset (points, locked profit)
+input double        InpBETriggerRR      = 3.0;          // BE trigger in RR (also see ticks below)
+input double        InpBETriggerPoints  = 900;         // BE trigger in ticks/points (whichever hits first)
+input int           InpBEOffsetPoints   = 20;          // BE offset (points, locked profit)
 input bool          InpUseTrailing      = true;         // Enable trailing stop
 input ENUM_TRAIL_MODE InpTrailMode      = TRAIL_ATR;    // Trailing mode
 input double        InpTrailAtrMult     = 2.0;          // Trail distance = ATR * mult
@@ -2967,7 +2983,7 @@ input double InpMinTimeAlign    = 55.0;    // Min TIE alignment %
 input bool   InpBlockV60Terminal= true;    // Block entry when v60 phase is Liquidation/Terminal against dir
 input bool   InpTIEBlockOpposed = true;    // TIE: block entry when a strongly-aligned cycle stack opposes
 input double InpTIEStrongAlign  = 60.0;    // TIE: "strong" cycle alignment threshold %
-input bool   InpAggressiveEntry = true;    // AGGRESSIVE: also enter on v60 confluence (network+curve+wave), bypassing strict Return/ERF gate
+input bool   InpAggressiveEntry = false;   // AGGRESSIVE: also enter on v60 confluence (mid-curve) - off so FU extremes lead
 input bool   InpAggReqNet       = true;    // Aggressive: require network bias to agree
 input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
 input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the indicator's extreme) - stop beyond the wick tip
@@ -3428,15 +3444,19 @@ void ManagePositions()
          }
       }
 
+      //--- profit zone gate: BE + trailing only kick in after 3R OR 900 ticks (whichever first) ---
+      double profitPts =(dir==1?(mkt-openP):(openP-mkt))/_Point;
+      bool   inProfitZone=(rMult>=InpBETriggerRR || profitPts>=InpBETriggerPoints);
+
       //--- break-even ---
-      if(InpUseBreakeven && rMult>=InpBETriggerRR && (mi<0||!gMgBEDone[mi])){
+      if(InpUseBreakeven && inProfitZone && (mi<0||!gMgBEDone[mi])){
          double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
          bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
          if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
       }
 
-      //--- trailing ---
-      if(InpUseTrailing){
+      //--- trailing (only once we're in the profit zone, so we never trail a fresh trade out) ---
+      if(InpUseTrailing && inProfitZone){
          double dist=(InpTrailMode==TRAIL_ATR?atr*InpTrailAtrMult:InpTrailPoints*_Point);
          double minD=MinStopDist()+_Point; if(dist<minD) dist=minD;
          double newSL=(dir==1? mkt-dist : mkt+dist);

@@ -31,6 +31,8 @@ input int    sIn_authMin     = 45;     // Min node authority
 input int    sIn_nodeMax     = 250;    // Max remembered nodes
 input int    sIn_dormantBars = 120;    // Bars until dormant
 input int    sIn_historyBars = 600;    // Bars until historical
+input double sIn_tapAtr      = 0.40;   // FU extreme: tap band (xATR) for return-to-node entry
+input int    sIn_tapMaxAge   = 60;     // FU extreme: max node age (bars) eligible for a tap entry
 
 //==================================================================
 // ADAPTIVE TIMEFRAME LADDER  (rung 3 = chart timeframe)
@@ -467,12 +469,25 @@ void ContextRun(const int bars)
    double mig50=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.5*(c_inv-cExtreme);
    double mig618=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.618*(c_inv-cExtreme);
 
-   //--- freshest FU node formed on the last closed bar = the indicator's extreme entry ---
+   //--- FU extreme entry node:  (a) a node that just VALIDATED on the last closed bar
+   //--- (the indicator printing a fresh circle at the extreme), OR
+   //--- (b) price RETURNING to / TAPPING a recent, valid, high-authority node
+   //--- (the indicator's circle being revisited — enter AT that extreme). ---
    bool fuFresh=false; int fuDir=0; double fuTip=NA, fuMid=NA; double fuAuth=-1.0;
+   double fuHi=d.h[last], fuLo=d.l[last]; double fuTap=atrL*sIn_tapAtr;
    for(int fi=0;fi<ArraySize(sn_px);fi++){
-      if(sn_bar[fi]==last && sn_state[fi]!=2){
-         double a=f_authSen(fi);
-         if(a>=sIn_authMin && a>fuAuth){ fuAuth=a; fuFresh=true; fuDir=sn_dir[fi]; fuTip=sn_px[fi]; fuMid=sn_mid[fi]; }
+      if(sn_state[fi]==2) continue;                         // skip invalidated nodes
+      double a=f_authSen(fi);
+      if(a<sIn_authMin) continue;
+      double np=sn_px[fi]; int nd=sn_dir[fi];
+      bool justFormed=(sn_bar[fi]==last);
+      // demand node (dir +1, sits below price): tapped when the bar low reaches it but close holds above
+      // supply node (dir -1, sits above price): tapped when the bar high reaches it but close holds below
+      bool tapped=(nd==1 ? (fuLo<=np+fuTap && clL>=np)
+                 : nd==-1? (fuHi>=np-fuTap && clL<=np) : false);
+      bool recent=((last-sn_bar[fi])<=sIn_tapMaxAge);
+      if((justFormed || (tapped && recent)) && nd!=0 && a>fuAuth){
+         fuAuth=a; fuFresh=true; fuDir=nd; fuTip=np; fuMid=sn_mid[fi];
       }
    }
 
