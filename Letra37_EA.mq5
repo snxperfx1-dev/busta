@@ -21,7 +21,7 @@
 #include <Trade/PositionInfo.mqh>
 #include <Trade/SymbolInfo.mqh>
 #include <Trade/AccountInfo.mqh>
-#include "Letra37_Engine.mqh"
+#include "Letra37_Senseei.mqh"
 
 //==================================================================
 // EA INPUT ENUMS
@@ -104,6 +104,22 @@ input ulong         InpMagic            = 370037;       // Magic number
 input ulong         InpDeviation        = 20;           // Max slippage (points)
 input string        InpComment          = "Letra37";    // Order comment
 input bool          InpShowStatus       = true;         // Show status panel (Comment)
+
+input group "Letra37 EA - v60 Context Filters (Senseei engine)"
+input bool   InpUseV60Context   = true;    // Compute v60 context (network / curve-life / TIE / narrative)
+input bool   InpReqNetAgree     = true;    // Require Invisible-Network bias to agree (or neutral)
+input bool   InpReqStackAgree   = false;   // Require v60 fractal stack to agree
+input bool   InpReqCurveAlive   = true;    // Require curve-life not DEAD at entry
+input double InpCurveAliveMin   = 33.0;    // Min curve-life to allow entry
+input bool   InpReqNarrative    = false;   // Require narrative not WEAKENING
+input bool   InpReqTimeAlign    = false;   // Require time-cycle alignment
+input double InpMinTimeAlign    = 55.0;    // Min TIE alignment %
+input bool   InpBlockV60Terminal= true;    // Block entry when v60 phase is Liquidation/Terminal against dir
+
+input group "Letra37 EA - v60 Curve-Life Management"
+input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
+input double InpCurveDeadBelow  = 32.0;    // life <= this => DEAD (close)
+input bool   InpUseMigrationTrail= false;  // Keep stop at ownership-migration 0.618 band while force persists
 
 //==================================================================
 // EA GLOBALS
@@ -303,6 +319,7 @@ void ComputeEngine()
    if(got<warmup+5) return;
    ResetState();
    EngineRun(got,eaT,eaO,eaH,eaL,eaC,eaVol,MathMax(warmup,got-InpEngineBars));
+   if(InpUseV60Context) SenseeiRun(InpEngineBars);   // v60 context (does not alter Letra cur_* decision)
 }
 
 //==================================================================
@@ -332,6 +349,15 @@ bool PassesFilters(const int dir)
    if(InpRequireHtfAlign && !(cur_htfAlign==dir || cur_htfAlign==0)) return(false);
    if(InpMinConfidence>0.0 && cur_doeConfidence<InpMinConfidence) return(false);
    if(cur_invInvalidated) return(false);
+   //--- v60 context filters (Letra still decides; these only confirm/veto) ---
+   if(InpUseV60Context){
+      if(InpReqNetAgree   && !(sen_netBias==dir || sen_netBias==0)) return(false);
+      if(InpReqStackAgree && sen_stackDir!=dir) return(false);
+      if(InpReqCurveAlive && sen_life<InpCurveAliveMin) return(false);
+      if(InpReqNarrative  && sen_narrState=="WEAKENING") return(false);
+      if(InpReqTimeAlign  && sen_timeAlign<InpMinTimeAlign) return(false);
+      if(InpBlockV60Terminal && (sen_phase=="Liquidation"||sen_phase=="Terminal Curve") && sen_waveDir!=0 && sen_waveDir!=dir) return(false);
+   }
    return(true);
 }
 
@@ -457,6 +483,8 @@ void ManagePositions()
       if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
       if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
       if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
+      //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
+      if(InpUseV60Context && InpUseCurveLifeExit && sen_life<=InpCurveDeadBelow && dir==sen_waveDir){ trade.PositionClose(tk); continue; }
 
       //--- partial close at TP1 ---
       if(InpUsePartial && mi>=0 && !gMgPartialDone[mi] && !naf(gMgTP1[mi])){
@@ -483,7 +511,12 @@ void ManagePositions()
       if(InpUseTrailing){
          double dist=(InpTrailMode==TRAIL_ATR?atr*InpTrailAtrMult:InpTrailPoints*_Point);
          double minD=MinStopDist()+_Point; if(dist<minD) dist=minD;
-         double newSL=(dir==1? mkt-dist : mkt+dist); newSL=NormPrice(newSL);
+         double newSL=(dir==1? mkt-dist : mkt+dist);
+         if(InpUseV60Context && InpUseMigrationTrail && sen_cpState=="PERSISTING" && dir==sen_waveDir && !naf(sen_mig618)){
+            double m=sen_mig618;
+            if((dir==1 && m<mkt) || (dir==-1 && m>mkt)) newSL=m;   // defend the migrated 0.618 band
+         }
+         newSL=NormPrice(newSL);
          double step=InpTrailStepPoints*_Point;
          bool improve=(dir==1?(newSL>curSL+step):(curSL==0||newSL<curSL-step));
          // never trail to the losing side of entry before BE
@@ -510,6 +543,13 @@ void ShowStatus()
    s+="Target : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
    s+="Pos    : "+IntegerToString(CountOwnPositions())+"   TradesToday "+IntegerToString(gTradesToday)+(gHalted?"  [HALTED]":"")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
+   if(InpUseV60Context){
+      s+="\n--- v60 context ---";
+      s+="\nNet "+(sen_netBias==1?"BULL":sen_netBias==-1?"BEAR":"-")+"  Stack "+(sen_stackDir==1?"BULL":sen_stackDir==-1?"BEAR":"-")+" "+R0(sen_stackPct)+"%  press "+R0(sen_pressure);
+      s+="\nCurve "+sen_alive+"  life "+R0(sen_life)+"  force "+sen_cpState;
+      s+="\nv60Phase "+sen_phase+"  Narr "+sen_narrState+" "+R0(sen_narrative)+(sen_converging?" (converging)":"");
+      s+="\nTime "+(sen_timeDir==1?"CLIMB":sen_timeDir==-1?"DIVE":"LEVEL")+" "+R0(sen_timeAlign)+"%  H1 "+sen_h1Timing+"  attr "+PXs(sen_attractorPx);
+   }
    Comment(s);
 }
 

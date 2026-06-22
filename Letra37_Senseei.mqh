@@ -245,7 +245,10 @@ int    sen_resCode=0, sen_eligN=0;
 string sen_action="WAIT", sen_intent="BALANCE", sen_timing="—", sen_opportunity="NONE", sen_phase="Point 4 Origin";
 double sen_entry=NA, sen_stop=NA, sen_t1=NA, sen_t2=NA, sen_t3=NA, sen_attractorPx=NA, sen_netTarget=NA, sen_fezHi=NA, sen_fezLo=NA;
 //--- curve life (management) ---
-double sen_life=50.0, sen_cpForce=0; string sen_cpState="NEUTRAL", sen_alive="◐ WEAKENING";
+double sen_life=50.0, sen_cpForce=0; string sen_cpState="NEUTRAL", sen_alive="WEAKENING";
+//--- narrative lineage / ownership migration (context) ---
+double sen_narrative=50.0; string sen_narrState="HOLDING"; bool sen_converging=false;
+double sen_chainVitality=50.0, sen_mig50=NA, sen_mig618=NA, sen_retrX=50.0;
 //--- TIE detail ---
 string sen_h1Timing="—"; double sen_wp=0, sen_atr=0;
 
@@ -330,6 +333,39 @@ void SenseeiRun(const int bars)
          }
       }
    }
+
+   //--- narrative lineage / chain vitality (canonical wave) ---
+   double narrDir=0, legX=NA, legPB=0, narrative=50.0; int supV=0, degV=0, seqCnt=0;
+   double seqLast=NA, seqPrev=NA; double compHist[]; ArrayResize(compHist,0);
+   for(int j=warmup;j<=last;j++){
+      datetime ct=d.t[j]; double clj=d.c[j], hj=d.h[j], lj=d.l[j];
+      double inv=MapVal(v3.t,v3.inv,v3.n,ct);
+      int cdir=f_waveDirByOrigin(inv,clj,(int)nz(MapVal(v3.t,v3.dir,v3.n,ct)));
+      double comp=nz(MapVal(v3.t,v3.comp,v3.n,ct));
+      int hs=ArraySize(compHist); ArrayResize(compHist,hs+1); compHist[hs]=comp;
+      double tighten=(hs>=6)?comp-compHist[hs-6]:0.0;
+      if(cdir!=(int)narrDir){ narrDir=cdir; legX=cdir==1?hj:(cdir==-1?lj:NA); legPB=0; narrative=50.0; supV=0; degV=0; seqLast=NA; seqPrev=NA; seqCnt=0; }
+      if(cdir!=0 && !naf(inv)){
+         bool newX=cdir==1?hj>nz(legX,hj):lj<nz(legX,lj);
+         if(newX){
+            if(legPB>6.0){
+               bool sup=legPB<=50.0 && tighten>=-1.0;
+               bool deg=legPB>=62.0 || tighten<-3.0;
+               int vote=sup?1:deg?-1:0;
+               supV+=vote==1?1:0; degV+=vote==-1?1:0;
+               narrative=clamp(narrative+vote*12.0+(tighten>0?3.0:-3.0),0.0,100.0);
+               seqPrev=seqLast; seqLast=legPB; seqCnt++;
+            }
+            legX=cdir==1?hj:lj; legPB=0;
+         } else {
+            double pbd=MathAbs(nz(legX,clj)-inv)>1e-9?MathAbs(nz(legX,clj)-clj)/MathAbs(nz(legX,clj)-inv)*100.0:0.0;
+            legPB=fmax2(legPB,pbd);
+         }
+      }
+   }
+   string narrState=narrative>=65.0?"STRENGTHENING":narrative<=35.0?"WEAKENING":"HOLDING";
+   bool converging=seqCnt>=2 && !naf(seqLast) && !naf(seqPrev) && seqLast<seqPrev;
+   double chainVitality=converging?fmin2(100.0,narrative+10.0):fmax2(0.0,narrative-10.0);
 
    //--- network aggregates at last bar ---
    double clL=d.c[last], atrL=atrC[last];
@@ -443,7 +479,10 @@ void SenseeiRun(const int bars)
    double cpForce=clamp(c_comp*0.50+residual*0.20-(int)c_rec*12.0+8.0,0.0,100.0);
    string cpState=cpForce>=60.0?"PERSISTING":cpForce<=35.0?"LEAKING":"NEUTRAL";
    double life=clamp(cpForce*0.45+residual*0.30-(recursionComplete&&!progressing?25.0:0.0)-(cpState=="LEAKING"&&!progressing?20.0:0.0)+(progressing?28.0:0.0)+(retrX<25.0?16.0:retrX<45.0?6.0:retrX>75.0?-12.0:0.0)+10.0,0.0,100.0);
-   string aliveTx=(progressing&&life>=45.0)?"▲ ALIVE · ATTACKING":life>=60.0?"● ALIVE · HOLD":life<=32.0?"✕ DEAD · FLIP":"◐ WEAKENING · MANAGE";
+   string aliveTx=(progressing&&life>=45.0)?"ALIVE - ATTACKING":life>=60.0?"ALIVE - HOLD":life<=32.0?"DEAD - FLIP":"WEAKENING - MANAGE";
+   //--- ownership migration band (0.5 / 0.618 of the owner leg) ---
+   double mig50=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.5*(c_inv-cExtreme);
+   double mig618=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.618*(c_inv-cExtreme);
 
    //--- publish ---
    sen_master=master; sen_waveDir=waveDir; sen_stackDir=stackDir; sen_netBias=netBias; sen_pdir=pdir; sen_timeDir=timeDir;
@@ -452,6 +491,8 @@ void SenseeiRun(const int bars)
    sen_resCode=resCode; sen_eligN=eligN; sen_action=action; sen_intent=intent; sen_timing=timing; sen_opportunity=opportunity; sen_phase=phaseStr;
    sen_entry=entry; sen_stop=c_inv; sen_t1=nz(c_tgt,attractorPx); sen_t2=t2; sen_t3=t3; sen_attractorPx=attractorPx; sen_netTarget=netTarget; sen_fezHi=fezHi; sen_fezLo=fezLo;
    sen_life=life; sen_cpForce=cpForce; sen_cpState=cpState; sen_alive=aliveTx; sen_h1Timing=h1Timing; sen_wp=c_wp; sen_atr=atrL;
+   sen_narrative=narrative; sen_narrState=narrState; sen_converging=converging; sen_chainVitality=chainVitality;
+   sen_mig50=mig50; sen_mig618=mig618; sen_retrX=retrX;
 }
 
 #endif // __LETRA37_SENSEEI_MQH__
