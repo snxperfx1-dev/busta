@@ -63,11 +63,11 @@ input ENUM_SL_MODE  InpSLMode           = SL_ENGINE;    // Stop-loss source
 input double        InpSLAtrMult        = 1.5;          // SL = ATR * mult (SL_ATR)
 input int           InpSLFixedPoints    = 300;          // SL fixed points (SL_FIXED)
 input double        InpSLEngineBufATR   = 0.10;         // Extra ATR buffer beyond engine stop
-input double        InpMinSLAtr         = 1.0;          // Minimum SL distance in ATR (stops getting stopped out instantly)
+input double        InpMinSLAtr         = 1.5;          // Minimum SL distance in ATR (stops getting stopped out instantly)
 input bool          InpUseKeyLevelStop  = true;         // Anchor SL beyond the recent KEY swing high/low (structure)
-input int           InpSwingLookback    = 14;           // Bars scanned for the protective key swing high/low
-input double        InpKeyLevelBufATR   = 0.50;         // Buffer beyond the key high/low (xATR)
-input double        InpMaxSLAtr         = 8.0;          // Safety cap on total SL distance (xATR)
+input int           InpSwingLookback    = 20;           // Bars scanned for the protective key swing high/low
+input double        InpKeyLevelBufATR   = 0.80;         // Buffer beyond the key high/low (xATR) - gold wicks are large
+input double        InpMaxSLAtr         = 10.0;         // Safety cap on total SL distance (xATR)
 
 input group "Letra37 EA - Take Profit"
 input ENUM_TP_MODE  InpTPMode           = TP_NETWORK;   // Take-profit source (FU / Invisible-Network attractor)
@@ -420,19 +420,17 @@ double KeyLevelStop(const int dir,const double entry)
    double atr=cur_atr; if(atr<=0) atr=10*_Point;
    int lb=InpSwingLookback; if(lb<2) lb=2;
    double buf=InpKeyLevelBufATR*atr;
+   double s=0.0;
    if(dir==1){
       int idx=iLowest(_Symbol,_Period,MODE_LOW,lb,1);     // 1 = skip the still-forming bar
-      if(idx<0) return(0.0);
-      double lo=iLow(_Symbol,_Period,idx);
-      if(lo<=0) return(0.0);
-      double s=lo-buf;
+      if(idx>=0){ double lo=iLow(_Symbol,_Period,idx); if(lo>0) s=lo-buf; }
+      //--- fold in the engine's structural invalidation (take whichever protects more = lower) ---
+      if(!naf(cur_invActiveStop) && cur_invActiveStop<entry){ double e=cur_invActiveStop-buf; if(s==0.0 || e<s) s=e; }
       return( s<entry ? s : 0.0 );                        // must sit below entry to be valid
    } else {
       int idx=iHighest(_Symbol,_Period,MODE_HIGH,lb,1);
-      if(idx<0) return(0.0);
-      double hi=iHigh(_Symbol,_Period,idx);
-      if(hi<=0) return(0.0);
-      double s=hi+buf;
+      if(idx>=0){ double hi=iHigh(_Symbol,_Period,idx); if(hi>0) s=hi+buf; }
+      if(!naf(cur_invActiveStop) && cur_invActiveStop>entry){ double e=cur_invActiveStop+buf; if(s==0.0 || e>s) s=e; }
       return( s>entry ? s : 0.0 );                        // must sit above entry to be valid
    }
 }
