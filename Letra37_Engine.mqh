@@ -957,6 +957,12 @@ string cur_compRegime="-";     // Low / Medium / High / Extreme (compression nea
 int    cur_recDepth=0;         // recursion count on the owner curve
 double cur_domTransfer=0.0;    // owner curve dominance transfer %
 string cur_entryReady="Not Ready"; // Not Ready / Early / Building / Pre-entry / Entry Active / Terminal
+//--- CURVE CAPACITY (F72): how much curve is left -> how many recursions are possible ---
+double cur_curveBudget=0.0;    // 0..100 remaining curve capacity to the HTF flip/objective
+int    cur_expRecDepth=0;      // expected recursive cycles still possible (0..4)
+double cur_transMaturity=0.0;  // transition maturity % (= dominance transfer)
+double cur_entryProb=0.0;      // entry-cycle probability %
+double cur_distFlipAtr=0.0;    // distance to HTF flip/objective in ATR
 //--- prev-bar phase code per rung (persist across recomputes; NOT reset by ResetState) ---
 int    gPrevPhM1=-1,gPrevPhM3=-1,gPrevPhM5=-1,gPrevPhM15=-1,gPrevPhH1=-1,gPrevPhH4=-1;
 string cur_l0phase,cur_l1phase,cur_l2phase,cur_l3phase,cur_l4phase;
@@ -2172,6 +2178,24 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
          else if(cur_transState=="TRANSITION COMPLETE"||cur_transState=="RETRACEMENT") cur_entryReady="Building";
          else if(cur_transState=="TRANSITION")                  cur_entryReady="Early";
          else                                                   cur_entryReady="Not Ready";
+
+         //--- CURVE CAPACITY ENGINE: how much curve is left -> how many recursions fit -------
+         //  destination = HTF objective (H4 then H1 then M5 target) = the flip the curve heads to.
+         //  natural recursion wavelength SHRINKS with compression (tight zone -> tiny fast loops),
+         //  so the SAME remaining distance fits more (smaller) cycles when compressed. This is the
+         //  geometry that collapses the wide-curve model into the compressed-curve model.
+         double _destA = MapVal(se240.t,se240.tgt,se240.n,ct);
+         if(naf(_destA)) _destA = MapVal(se60.t,se60.tgt,se60.n,ct);
+         if(naf(_destA)) _destA = se5_tgt;
+         double _atr2  = cur_atr>0?cur_atr:10*_Point;
+         double _px    = c[i];
+         cur_distFlipAtr = (!naf(_destA))? MathAbs(_px-_destA)/_atr2 : 5.0;
+         double _wavelen = fmax2(0.4, 2.0*(1.0-_oc/100.0));          // loop size: low comp ~2 ATR, high comp ~0.4 ATR
+         cur_expRecDepth = (int)fmin2(4.0, fmax2(0.0, MathRound(cur_distFlipAtr/_wavelen)));
+         cur_curveBudget = fmin2(100.0, cur_distFlipAtr*12.5);        // 8 ATR of room = "full" budget
+         cur_transMaturity = cur_domTransfer;                         // dominance transfer % = how mature the transition is
+         double _nearFlip = fmax2(0.0, 1.0 - cur_distFlipAtr/3.0);    // 1 at the flip, 0 beyond 3 ATR
+         cur_entryProb = fmin2(100.0, cur_domTransfer*0.45 + _nearFlip*40.0 + (cur_mtfEntryFresh?15.0:0.0));
 
          gPrevPhM1=_phc[0]; gPrevPhM3=_phc[1]; gPrevPhM5=_phc[2];
          gPrevPhM15=_phc[3]; gPrevPhH1=_phc[4]; gPrevPhH4=_phc[5];
