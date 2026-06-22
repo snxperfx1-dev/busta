@@ -2904,6 +2904,7 @@ input ENUM_SL_MODE  InpSLMode           = SL_ENGINE;    // Stop-loss source
 input double        InpSLAtrMult        = 1.5;          // SL = ATR * mult (SL_ATR)
 input int           InpSLFixedPoints    = 300;          // SL fixed points (SL_FIXED)
 input double        InpSLEngineBufATR   = 0.10;         // Extra ATR buffer beyond engine stop
+input double        InpMinSLAtr         = 1.0;          // Minimum SL distance in ATR (stops getting stopped out instantly)
 
 input group "Letra37 EA - Take Profit"
 input ENUM_TP_MODE  InpTPMode           = TP_NETWORK;   // Take-profit source (FU / Invisible-Network attractor)
@@ -3078,6 +3079,18 @@ int OwnPositionDir()  // returns +1/-1 of first own position, 0 if none
    }
    return(0);
 }
+bool OwnYoungerThan(const int bars)   // true if any own position has been open < bars
+{
+   int ps=MathMax(PeriodSeconds(_Period),1);
+   for(int q=PositionsTotal()-1;q>=0;q--){
+      ulong tk=PositionGetTicket(q);
+      if(tk==0) continue;
+      if(PositionGetInteger(POSITION_MAGIC)!=(long)InpMagic || PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
+      int held=(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/ps);
+      if(held<bars) return(true);
+   }
+   return(false);
+}
 void CloseOwnPositions(const int dirFilter=0) // dirFilter 0=all, 1=longs, -1=shorts
 {
    for(int q=PositionsTotal()-1;q>=0;q--){
@@ -3220,8 +3233,8 @@ double ComputeSL(const int dir,const double entry)
    } else {
       sl=entry + (dir==1? -atr*InpSLAtrMult : atr*InpSLAtrMult);
    }
-   //--- enforce correct side + min stop distance ---
-   double minD=MinStopDist()+_Point;
+   //--- enforce correct side + minimum stop distance (broker min AND >= InpMinSLAtr*ATR) ---
+   double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*atr);
    if(dir==1  && sl>entry-minD) sl=entry-minD;
    if(dir==-1 && sl<entry+minD) sl=entry+minD;
    return(NormPrice(sl));
@@ -3278,6 +3291,7 @@ void TryEnter()
 
    int ownDir=OwnPositionDir();
    if(ownDir!=0 && ownDir!=dir){
+      if(OwnYoungerThan(InpMinHoldBars)){ gEntryBlock="hold (young pos, no flip)"; return; }   // don't flip a fresh trade
       if(InpReverseOnOpposite){ CloseOwnPositions(0); DeletePendingOrders(); }
       else if(InpExitOnOpposite){ CloseOwnPositions(-dir); }
       else { gEntryBlock="opposite pos open"; return; }
@@ -3356,10 +3370,10 @@ void ManagePositions()
       int heldBars=(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/MathMax(PeriodSeconds(_Period),1));
       bool canSoftExit=(heldBars>=InpMinHoldBars);
       //--- always-on protective exits (broker SL/TP also always active) ---
-      if(InpExitOnInvalid && cur_invInvalidated){ trade.PositionClose(tk); continue; }
       if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
       //--- discretionary exits: only after the minimum hold (stops cutting straight away) ---
       if(canSoftExit){
+         if(InpExitOnInvalid && cur_invInvalidated){ trade.PositionClose(tk); continue; }
          if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
          if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
          //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
