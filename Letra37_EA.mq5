@@ -131,7 +131,7 @@ input double InpChainExitBelow  = 25.0;    // Exit when chain vitality <= this (
 CTrade        trade;
 CPositionInfo posinfo;
 CSymbolInfo   sym;
-CAccountInfo  acc;
+CAccountInfo  gAccount;
 
 datetime gLastBarTime   = 0;
 datetime gDayStamp      = 0;
@@ -191,7 +191,7 @@ double MoneyPerPointPerLot()
 double CalcLot(const double entry,const double sl)
 {
    if(InpLotMode==LOT_FIXED) return(NormalizeLot(InpFixedLot));
-   double riskMoney=acc.Equity()*InpRiskPercent/100.0;
+   double riskMoney=gAccount.Equity()*InpRiskPercent/100.0;
    double slPts=MathAbs(entry-sl)/_Point;
    double mpp=MoneyPerPointPerLot();
    if(slPts<1 || mpp<=0) return(NormalizeLot(InpFixedLot));
@@ -275,7 +275,7 @@ int OnInit()
    g_lastProcessed=-1;
 
    gDayStamp=0; gTradesToday=0; gHalted=false;
-   gDayStartEquity=acc.Equity();
+   gDayStartEquity=gAccount.Equity();
    gLastBarTime=0;
    return(INIT_SUCCEEDED);
 }
@@ -290,10 +290,10 @@ void DailyRollover()
    MqlDateTime dt; TimeToStruct(TimeCurrent(),dt);
    datetime dayKey=(datetime)(dt.year*10000+dt.mon*100+dt.day);
    if(dayKey!=gDayStamp){
-      gDayStamp=dayKey; gTradesToday=0; gHalted=false; gDayStartEquity=acc.Equity();
+      gDayStamp=dayKey; gTradesToday=0; gHalted=false; gDayStartEquity=gAccount.Equity();
    }
    if(InpMaxDailyLossPct>0.0){
-      double dd=(gDayStartEquity-acc.Equity())/MathMax(gDayStartEquity,1.0)*100.0;
+      double dd=(gDayStartEquity-gAccount.Equity())/MathMax(gDayStartEquity,1.0)*100.0;
       if(dd>=InpMaxDailyLossPct){ gHalted=true; }
    }
 }
