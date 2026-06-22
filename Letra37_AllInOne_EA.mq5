@@ -966,6 +966,14 @@ datetime g_lastHTFbuild=0;
 //--- phase / direction ---
 string cur_ie1aPhase, cur_currentDisplayPhase, cur_hypFamily;
 int    cur_dirM1,cur_dirM3,cur_dirM5,cur_dirM15,cur_dirH1,cur_dirH4;
+//--- multi-timeframe entry: a fresh Demand/Supply Return on ANY rung (M1..H4) ---
+int    cur_mtfEntryDir=0;      // +1 long / -1 short / 0 none
+bool   cur_mtfEntryFresh=false;// the Return just formed on this bar (transition)
+int    cur_mtfEntryWt=0;       // rung weight (1=M1 ... 6=H4)
+double cur_mtfEntryInv=NA;     // that rung's invalidation level (for the stop)
+string cur_mtfEntryTF="-";     // which timeframe presented it
+//--- prev-bar phase code per rung (persist across recomputes; NOT reset by ResetState) ---
+int    gPrevPhM1=-1,gPrevPhM3=-1,gPrevPhM5=-1,gPrevPhM15=-1,gPrevPhH1=-1,gPrevPhH4=-1;
 string cur_l0phase,cur_l1phase,cur_l2phase,cur_l3phase,cur_l4phase;
 double cur_phaseConfidence,cur_phaseIntegrity,cur_phaseProgress,cur_ie1aPhaseConf;
 double cur_fractalStackScore,cur_fractalCtxScore; int cur_fractalStackDir;
@@ -2117,6 +2125,36 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
    if(isLast){
       cur_ie1aPhase=ie1a_currentPhase; cur_currentDisplayPhase=currentDisplayPhase; cur_hypFamily=ie1a_hypFamily;
       cur_dirM1=m1_dir; cur_dirM3=l3_dir; cur_dirM5=l0_dir; cur_dirM15=l1_dir; cur_dirH1=l2_dir; cur_dirH4=l4_dir;
+      //--- MULTI-TIMEFRAME ENTRY SCANNER -------------------------------------
+      //  The EA sees ALL six rungs. A fresh Demand Return (phase code 13 -> long)
+      //  or Supply Return (code 14 -> short) on ANY rung is an entry trigger.
+      //  We pick the freshest, highest-authority rung; the thesis veto in the EA
+      //  still decides whether to actually take it. Phase persists once latched,
+      //  so we only fire on the bar it FIRST appears (transition vs prev bar).
+      {
+         int    _phc[6]; double _inv[6]; int _wt[6]; string _tfn[6]; int _prev[6];
+         _phc[0]=(int)nz(se1_ph);   _inv[0]=se1_inv;   _wt[0]=1; _tfn[0]="M1";  _prev[0]=gPrevPhM1;
+         _phc[1]=(int)nz(se3_ph);   _inv[1]=se3_inv;   _wt[1]=2; _tfn[1]="M3";  _prev[1]=gPrevPhM3;
+         _phc[2]=(int)nz(se5_ph);   _inv[2]=se5_inv;   _wt[2]=3; _tfn[2]="M5";  _prev[2]=gPrevPhM5;
+         _phc[3]=(int)nz(se15_ph);  _inv[3]=se15_inv;  _wt[3]=4; _tfn[3]="M15"; _prev[3]=gPrevPhM15;
+         _phc[4]=(int)nz(se60_ph);  _inv[4]=se60_inv;  _wt[4]=5; _tfn[4]="H1";  _prev[4]=gPrevPhH1;
+         _phc[5]=(int)nz(se240_ph); _inv[5]=se240_inv; _wt[5]=6; _tfn[5]="H4";  _prev[5]=gPrevPhH4;
+         cur_mtfEntryDir=0; cur_mtfEntryFresh=false; cur_mtfEntryWt=0; cur_mtfEntryInv=NA; cur_mtfEntryTF="-";
+         int _bestWt=-1;
+         for(int _r=0;_r<6;_r++){
+            int _c=_phc[_r], _pc=_prev[_r];
+            bool _isRet =(_c==13||_c==14);
+            bool _wasRet=(_pc==13||_pc==14);
+            if(_isRet && !_wasRet && _wt[_r]>_bestWt){      // fresh transition into Return
+               _bestWt=_wt[_r];
+               cur_mtfEntryDir=(_c==13?1:-1);
+               cur_mtfEntryFresh=true; cur_mtfEntryWt=_wt[_r];
+               cur_mtfEntryInv=_inv[_r]; cur_mtfEntryTF=_tfn[_r];
+            }
+         }
+         gPrevPhM1=_phc[0]; gPrevPhM3=_phc[1]; gPrevPhM5=_phc[2];
+         gPrevPhM15=_phc[3]; gPrevPhH1=_phc[4]; gPrevPhH4=_phc[5];
+      }
       cur_l0phase=l0_phaseCanon; cur_l1phase=l1_phaseCanon; cur_l2phase=l2_phaseCanon; cur_l3phase=l3_phaseCanon; cur_l4phase=l4_phaseCanon;
       cur_phaseConfidence=phaseConfidence; cur_phaseIntegrity=phaseIntegrity; cur_phaseProgress=phaseProgress; cur_ie1aPhaseConf=ie1a_phaseConfidence;
       cur_fractalStackScore=fractalStackScore; cur_fractalCtxScore=fractalCtxScore; cur_fractalStackDir=fractalStackDir;
@@ -2994,6 +3032,8 @@ input bool   InpAggReqNet       = true;    // Aggressive: require network bias t
 input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
 input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the indicator's extreme) - stop beyond the wick tip
 input bool   InpFURequireBias   = true;    // FU: only take a node that AGREES with the dominant bias (DOE+network+wave) - stops fading reversals
+input bool   InpMultiTFEntry    = true;    // MULTI-TF: enter on a fresh Demand/Supply Return on ANY rung (M1/M3/M5/M15/H1/H4)
+input int    InpMinEntryRung     = 1;      // Lowest rung allowed for a multi-TF entry (1=M1 ... 6=H4)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -3364,7 +3404,7 @@ double ComputeTP(const int dir,const double entry,const double sl)
 void TryEnter()
 {
    int dir=DesiredDirection();
-   bool aggressive=false, fuEntry=false;
+   bool aggressive=false, fuEntry=false, mtfEntry=false;
    //--- PRIORITY: enter AT the fresh FU node (the indicator's extreme) ---
    if(dir==0 && InpUseV60Context && InpFUExtremeEntry && ctx_fuFresh && ctx_fuDir!=0){
       int cb=ConsensusBias();
@@ -3373,6 +3413,10 @@ void TryEnter()
       } else {
          dir=ctx_fuDir; aggressive=true; fuEntry=true;
       }
+   }
+   //--- MULTI-TF: a fresh Demand/Supply Return on ANY rung (M1..H4) — the EA sees every timeframe ---
+   if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
+      dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true;
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
    if(dir==0 && InpUseV60Context && InpAggressiveEntry){
@@ -3433,11 +3477,25 @@ void TryEnter()
       if(dir==-1&& slBase>entry+maxD) slBase=entry+maxD;
       slBase=NormPrice(slBase);
    } else slBase=ComputeSL(dir,entry);
+   //--- multi-TF entry: anchor the stop beyond THAT rung's invalidation (+ key swing) ---
+   if(mtfEntry && !naf(cur_mtfEntryInv)){
+      double a=cur_atr; if(a<=0) a=10*_Point;
+      double s2=cur_mtfEntryInv + (dir==1? -InpSLEngineBufATR*a : InpSLEngineBufATR*a);
+      double ks=KeyLevelStop(dir,entry);
+      if(ks!=0.0){ if(dir==1) s2=MathMin(s2,ks); else s2=MathMax(s2,ks); }
+      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*a);
+      if(dir==1 && s2>entry-minD) s2=entry-minD;
+      if(dir==-1&& s2<entry+minD) s2=entry+minD;
+      double maxD=InpMaxSLAtr*a;
+      if(dir==1 && s2<entry-maxD) s2=entry-maxD;
+      if(dir==-1&& s2>entry+maxD) s2=entry+maxD;
+      slBase=NormPrice(s2);
+   }
    double lot=CalcLot(entry,slBase);
    double tp=ComputeTP(dir,entry,slBase);
    bool _arrow=(dir==1?cur_longSignal:cur_shortSignal);
    bool _doe=(dir==1?(cur_doeAction=="Long"):(cur_doeAction=="Short"));
-   string _trig=fuEntry?"FU":aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
+   string _trig=fuEntry?"FU":mtfEntry?("MTF:"+cur_mtfEntryTF):aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
    string cmt=InpComment+" "+_trig+" "+cur_tqeGrade;
 
    bool ok=false;
@@ -3589,6 +3647,7 @@ void ShowStatus()
    s+="Dest   : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
    s+="Pos    : "+IntegerToString(CountOwnPositions())+"   TradesToday "+IntegerToString(gTradesToday)+(gHalted?"  [HALTED]":"")+"\n";
    s+="Gate   : "+gEntryBlock+"\n";
+   s+="MTF    : "+(cur_mtfEntryFresh?("FRESH "+(cur_mtfEntryDir==1?"LONG ":"SHORT ")+cur_mtfEntryTF+" Return"):"M1 "+f_waveDirLabel(cur_dirM1)+" M5 "+f_waveDirLabel(cur_dirM5)+" H1 "+f_waveDirLabel(cur_dirH1)+" H4 "+f_waveDirLabel(cur_dirH4))+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";

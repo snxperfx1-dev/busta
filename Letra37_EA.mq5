@@ -126,6 +126,8 @@ input bool   InpAggReqNet       = true;    // Aggressive: require network bias t
 input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
 input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the indicator's extreme) - stop beyond the wick tip
 input bool   InpFURequireBias   = true;    // FU: only take a node that AGREES with the dominant bias (DOE+network+wave) - stops fading reversals
+input bool   InpMultiTFEntry    = true;    // MULTI-TF: enter on a fresh Demand/Supply Return on ANY rung (M1/M3/M5/M15/H1/H4)
+input int    InpMinEntryRung     = 1;      // Lowest rung allowed for a multi-TF entry (1=M1 ... 6=H4)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -496,7 +498,7 @@ double ComputeTP(const int dir,const double entry,const double sl)
 void TryEnter()
 {
    int dir=DesiredDirection();
-   bool aggressive=false, fuEntry=false;
+   bool aggressive=false, fuEntry=false, mtfEntry=false;
    //--- PRIORITY: enter AT the fresh FU node (the indicator's extreme) ---
    if(dir==0 && InpUseV60Context && InpFUExtremeEntry && ctx_fuFresh && ctx_fuDir!=0){
       int cb=ConsensusBias();
@@ -505,6 +507,10 @@ void TryEnter()
       } else {
          dir=ctx_fuDir; aggressive=true; fuEntry=true;
       }
+   }
+   //--- MULTI-TF: a fresh Demand/Supply Return on ANY rung (M1..H4) — the EA sees every timeframe ---
+   if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
+      dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true;
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
    if(dir==0 && InpUseV60Context && InpAggressiveEntry){
@@ -565,11 +571,25 @@ void TryEnter()
       if(dir==-1&& slBase>entry+maxD) slBase=entry+maxD;
       slBase=NormPrice(slBase);
    } else slBase=ComputeSL(dir,entry);
+   //--- multi-TF entry: anchor the stop beyond THAT rung's invalidation (+ key swing) ---
+   if(mtfEntry && !naf(cur_mtfEntryInv)){
+      double a=cur_atr; if(a<=0) a=10*_Point;
+      double s2=cur_mtfEntryInv + (dir==1? -InpSLEngineBufATR*a : InpSLEngineBufATR*a);
+      double ks=KeyLevelStop(dir,entry);
+      if(ks!=0.0){ if(dir==1) s2=MathMin(s2,ks); else s2=MathMax(s2,ks); }
+      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*a);
+      if(dir==1 && s2>entry-minD) s2=entry-minD;
+      if(dir==-1&& s2<entry+minD) s2=entry+minD;
+      double maxD=InpMaxSLAtr*a;
+      if(dir==1 && s2<entry-maxD) s2=entry-maxD;
+      if(dir==-1&& s2>entry+maxD) s2=entry+maxD;
+      slBase=NormPrice(s2);
+   }
    double lot=CalcLot(entry,slBase);
    double tp=ComputeTP(dir,entry,slBase);
    bool _arrow=(dir==1?cur_longSignal:cur_shortSignal);
    bool _doe=(dir==1?(cur_doeAction=="Long"):(cur_doeAction=="Short"));
-   string _trig=fuEntry?"FU":aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
+   string _trig=fuEntry?"FU":mtfEntry?("MTF:"+cur_mtfEntryTF):aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
    string cmt=InpComment+" "+_trig+" "+cur_tqeGrade;
 
    bool ok=false;
@@ -721,6 +741,7 @@ void ShowStatus()
    s+="Dest   : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
    s+="Pos    : "+IntegerToString(CountOwnPositions())+"   TradesToday "+IntegerToString(gTradesToday)+(gHalted?"  [HALTED]":"")+"\n";
    s+="Gate   : "+gEntryBlock+"\n";
+   s+="MTF    : "+(cur_mtfEntryFresh?("FRESH "+(cur_mtfEntryDir==1?"LONG ":"SHORT ")+cur_mtfEntryTF+" Return"):"M1 "+f_waveDirLabel(cur_dirM1)+" M5 "+f_waveDirLabel(cur_dirM5)+" H1 "+f_waveDirLabel(cur_dirH1)+" H4 "+f_waveDirLabel(cur_dirH4))+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";
