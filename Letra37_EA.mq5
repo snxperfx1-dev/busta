@@ -91,6 +91,7 @@ input bool          InpExitOnOpposite   = true;         // Close on opposite eng
 input bool          InpExitOnInvalid    = true;         // Close on engine invalidation
 input bool          InpExitOnPhaseFlip  = false;        // Close on Absorption/Retracement phase (off - was cutting too early)
 input int           InpMinHoldBars      = 5;            // Min bars to hold before ANY discretionary exit (SL/TP always active)
+input bool          InpHoldWithThesis   = true;         // HOLD a bias-aligned trade through opposite signals while the thesis still supports it
 
 input group "Letra37 EA - Session / Guards"
 input bool          InpUseSession       = false;        // Restrict trading hours (server time)
@@ -627,10 +628,15 @@ void ManagePositions()
       //--- always-on protective exits (broker SL/TP also always active) ---
       if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
       //--- discretionary exits: only after the minimum hold (stops cutting straight away) ---
-      if(canSoftExit){
+      //--- while the dominant thesis still backs this trade, HOLD through opposite blips ---
+      int  cbHold=ConsensusBias();
+      bool thesisSupports=(InpHoldWithThesis && cbHold!=0 && cbHold==dir);
+      if(canSoftExit && !thesisSupports){
          if(InpExitOnInvalid && cur_invInvalidated){ trade.PositionClose(tk); continue; }
          if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
          if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
+      }
+      if(canSoftExit){
          //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
          if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ trade.PositionClose(tk); continue; }
          //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
