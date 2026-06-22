@@ -56,7 +56,7 @@ input ENUM_LOT_MODE InpLotMode          = LOT_RISK_PCT; // Position sizing mode
 input double        InpFixedLot         = 0.10;         // Fixed lot (LOT_FIXED)
 input double        InpRiskPercent      = 1.0;          // Risk % of equity (LOT_RISK_PCT)
 input double        InpMaxLot           = 5.0;          // Hard lot cap
-input int           InpMaxSpreadPoints  = 40;           // Max spread (points); 0=off
+input int           InpMaxSpreadPoints  = 0;            // Max spread (points); 0=off (gold spreads are large!)
 
 input group "Letra37 EA - Stop Loss"
 input ENUM_SL_MODE  InpSLMode           = SL_ENGINE;    // Stop-loss source
@@ -114,7 +114,7 @@ input bool   InpTIEBlockOpposed = true;    // TIE: block entry when a strongly-a
 input double InpTIEStrongAlign  = 60.0;    // TIE: "strong" cycle alignment threshold %
 input bool   InpAggressiveEntry = true;    // AGGRESSIVE: also enter on v60 confluence (network+curve+wave), bypassing strict Return/ERF gate
 input bool   InpAggReqNet       = true;    // Aggressive: require network bias to agree
-input bool   InpAggReqTime      = true;    // Aggressive: respect TIE-opposed block
+input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
@@ -136,6 +136,7 @@ datetime gDayStamp      = 0;
 double   gDayStartEquity= 0.0;
 int      gTradesToday   = 0;
 bool     gHalted        = false;
+string   gEntryBlock    = "-";   // live reason the EA is NOT entering (shown in panel)
 
 //--- chart-TF rates for the engine ---
 datetime eaT[]; double eaO[],eaH[],eaL[],eaC[],eaVol[];
@@ -347,21 +348,21 @@ int DesiredDirection()
 
 bool PassesFilters(const int dir)
 {
-   if(dir==1 && !InpTradeLongs) return(false);
-   if(dir==-1&& !InpTradeShorts) return(false);
-   if(InpRequireErfGate && !cur_erfEntryGate) return(false);
-   if(InpRequireHtfAlign && !(cur_htfAlign==dir || cur_htfAlign==0)) return(false);
-   if(InpMinConfidence>0.0 && cur_doeConfidence<InpMinConfidence) return(false);
-   if(cur_invInvalidated) return(false);
+   if(dir==1 && !InpTradeLongs){ gEntryBlock="longs off"; return(false); }
+   if(dir==-1&& !InpTradeShorts){ gEntryBlock="shorts off"; return(false); }
+   if(InpRequireErfGate && !cur_erfEntryGate){ gEntryBlock="ERF gate shut"; return(false); }
+   if(InpRequireHtfAlign && !(cur_htfAlign==dir || cur_htfAlign==0)){ gEntryBlock="HTF align"; return(false); }
+   if(InpMinConfidence>0.0 && cur_doeConfidence<InpMinConfidence){ gEntryBlock="DOE conf low"; return(false); }
+   if(cur_invInvalidated){ gEntryBlock="invalidated"; return(false); }
    //--- v60 context filters (Letra still decides; these only confirm/veto) ---
    if(InpUseV60Context){
-      if(InpReqNetAgree   && !(ctx_netBias==dir || ctx_netBias==0)) return(false);
-      if(InpReqStackAgree && ctx_stackDir!=dir) return(false);
-      if(InpReqCurveAlive && ctx_life<InpCurveAliveMin) return(false);
-      if(InpReqNarrative  && ctx_narrState=="WEAKENING") return(false);
-      if(InpReqTimeAlign  && ctx_timeAlign<InpMinTimeAlign) return(false);
-      if(InpBlockV60Terminal && (ctx_phase=="Liquidation"||ctx_phase=="Terminal Curve") && ctx_waveDir!=0 && ctx_waveDir!=dir) return(false);
-      if(InpTIEBlockOpposed && ctx_timeAlign>=InpTIEStrongAlign && ctx_timeDir!=0 && ctx_timeDir!=dir) return(false);
+      if(InpReqNetAgree   && !(ctx_netBias==dir || ctx_netBias==0)){ gEntryBlock="network disagrees"; return(false); }
+      if(InpReqStackAgree && ctx_stackDir!=dir){ gEntryBlock="stack disagrees"; return(false); }
+      if(InpReqCurveAlive && ctx_life<InpCurveAliveMin){ gEntryBlock="curve weak"; return(false); }
+      if(InpReqNarrative  && ctx_narrState=="WEAKENING"){ gEntryBlock="narrative weak"; return(false); }
+      if(InpReqTimeAlign  && ctx_timeAlign<InpMinTimeAlign){ gEntryBlock="time align low"; return(false); }
+      if(InpBlockV60Terminal && (ctx_phase=="Liquidation"||ctx_phase=="Terminal Curve") && ctx_waveDir!=0 && ctx_waveDir!=dir){ gEntryBlock="v60 terminal vs dir"; return(false); }
+      if(InpTIEBlockOpposed && ctx_timeAlign>=InpTIEStrongAlign && ctx_timeDir!=0 && ctx_timeDir!=dir){ gEntryBlock="TIE opposed"; return(false); }
    }
    return(true);
 }
@@ -420,26 +421,26 @@ void TryEnter()
              && !(InpAggReqTime && InpTIEBlockOpposed && ctx_timeAlign>=InpTIEStrongAlign && ctx_timeDir!=0 && ctx_timeDir!=adir);
       if(ok){ dir=adir; aggressive=true; }
    }
-   if(dir==0) return;
+   if(dir==0){ gEntryBlock=(InpUseV60Context&&InpAggressiveEntry)?"no signal / v60 not aligned":"no signal (awaiting Return)"; return; }
    if(!aggressive){
       if(!PassesFilters(dir)) return;          // strict Letra path keeps full filters
    } else {
-      if(dir==1 && !InpTradeLongs) return;     // aggressive path: light gating only
-      if(dir==-1&& !InpTradeShorts) return;
-      if(cur_invInvalidated) return;
+      if(dir==1 && !InpTradeLongs){ gEntryBlock="longs off"; return; }     // aggressive path: light gating only
+      if(dir==-1&& !InpTradeShorts){ gEntryBlock="shorts off"; return; }
+      if(cur_invInvalidated){ gEntryBlock="invalidated"; return; }
    }
-   if(!SessionOK()) return;
-   if(gHalted) return;
-   if(InpMaxTradesPerDay>0 && gTradesToday>=InpMaxTradesPerDay) return;
-   if(InpMaxSpreadPoints>0){ long sp=(long)SymbolInfoInteger(_Symbol,SYMBOL_SPREAD); if(sp>InpMaxSpreadPoints) return; }
+   if(!SessionOK()){ gEntryBlock="session closed"; return; }
+   if(gHalted){ gEntryBlock="halted (daily loss)"; return; }
+   if(InpMaxTradesPerDay>0 && gTradesToday>=InpMaxTradesPerDay){ gEntryBlock="max trades/day"; return; }
+   if(InpMaxSpreadPoints>0){ long sp=(long)SymbolInfoInteger(_Symbol,SYMBOL_SPREAD); if(sp>InpMaxSpreadPoints){ gEntryBlock="spread "+IntegerToString((int)sp); return; } }
 
    int ownDir=OwnPositionDir();
    if(ownDir!=0 && ownDir!=dir){
       if(InpReverseOnOpposite){ CloseOwnPositions(0); DeletePendingOrders(); }
       else if(InpExitOnOpposite){ CloseOwnPositions(-dir); }
-      else return;
+      else { gEntryBlock="opposite pos open"; return; }
    }
-   if(CountOwnPositions()>=InpMaxPositions) return;
+   if(CountOwnPositions()>=InpMaxPositions){ gEntryBlock="max positions"; return; }
 
    sym.RefreshRates();
    double ask=sym.Ask(), bid=sym.Bid();
@@ -469,6 +470,7 @@ void TryEnter()
    }
    if(ok){
       gTradesToday++;
+      gEntryBlock="ENTERED "+_trig;
       ulong tk=trade.ResultOrder();
       // register live position (market entries fill immediately)
       if(posinfo.SelectByTicket(trade.ResultDeal())) {}
@@ -581,6 +583,7 @@ void ShowStatus()
    s+="Stop   : "+PXs(cur_invActiveStop)+(cur_invInvalidated?" [INVALID]":"")+"   Target "+PXs(!naf(ctx_netTarget)?ctx_netTarget:ctx_attractorPx)+"\n";
    s+="Dest   : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
    s+="Pos    : "+IntegerToString(CountOwnPositions())+"   TradesToday "+IntegerToString(gTradesToday)+(gHalted?"  [HALTED]":"")+"\n";
+   s+="Gate   : "+gEntryBlock+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";
