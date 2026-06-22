@@ -112,6 +112,9 @@ input double InpMinTimeAlign    = 55.0;    // Min TIE alignment %
 input bool   InpBlockV60Terminal= true;    // Block entry when v60 phase is Liquidation/Terminal against dir
 input bool   InpTIEBlockOpposed = true;    // TIE: block entry when a strongly-aligned cycle stack opposes
 input double InpTIEStrongAlign  = 60.0;    // TIE: "strong" cycle alignment threshold %
+input bool   InpAggressiveEntry = false;   // AGGRESSIVE: also enter on v60 confluence (network+curve+wave), bypassing strict Return/ERF gate
+input bool   InpAggReqNet       = true;    // Aggressive: require network bias to agree
+input bool   InpAggReqTime      = true;    // Aggressive: respect TIE-opposed block
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
@@ -406,8 +409,25 @@ double ComputeTP(const int dir,const double entry,const double sl)
 void TryEnter()
 {
    int dir=DesiredDirection();
+   bool aggressive=false;
+   //--- aggressive v60-confluence entry when strict Letra has no signal ---
+   if(dir==0 && InpUseV60Context && InpAggressiveEntry){
+      int adir=ctx_waveDir;
+      bool ok = adir!=0
+             && (!InpAggReqNet || ctx_netBias==adir || ctx_netBias==0)
+             && ctx_life>=InpCurveAliveMin
+             && !((ctx_phase=="Liquidation"||ctx_phase=="Terminal Curve") && ctx_waveDir!=adir)
+             && !(InpAggReqTime && InpTIEBlockOpposed && ctx_timeAlign>=InpTIEStrongAlign && ctx_timeDir!=0 && ctx_timeDir!=adir);
+      if(ok){ dir=adir; aggressive=true; }
+   }
    if(dir==0) return;
-   if(!PassesFilters(dir)) return;
+   if(!aggressive){
+      if(!PassesFilters(dir)) return;          // strict Letra path keeps full filters
+   } else {
+      if(dir==1 && !InpTradeLongs) return;     // aggressive path: light gating only
+      if(dir==-1&& !InpTradeShorts) return;
+      if(cur_invInvalidated) return;
+   }
    if(!SessionOK()) return;
    if(gHalted) return;
    if(InpMaxTradesPerDay>0 && gTradesToday>=InpMaxTradesPerDay) return;
@@ -429,7 +449,7 @@ void TryEnter()
    double tp=ComputeTP(dir,entry,slBase);
    bool _arrow=(dir==1?cur_longSignal:cur_shortSignal);
    bool _doe=(dir==1?(cur_doeAction=="Long"):(cur_doeAction=="Short"));
-   string _trig=(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
+   string _trig=aggressive?"V60AGG":(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
    string cmt=InpComment+" "+_trig+" "+cur_tqeGrade;
 
    bool ok=false;
