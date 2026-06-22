@@ -1,8 +1,8 @@
-#ifndef __LETRA37_SENSEEI_MQH__
-#define __LETRA37_SENSEEI_MQH__
+#ifndef __LETRA37_CONTEXT_MQH__
+#define __LETRA37_CONTEXT_MQH__
 //+------------------------------------------------------------------+
-//| Letra37_Senseei.mqh                                              |
-//| Best-of-v60 ("F16 Raptor / Master Senseei") decision layer,      |
+//| Letra37_Context.mqh                                              |
+//| Best-of-v60 ("F16 Raptor") FEATURE / CONTEXT layer for Letra,    |
 //| ported on top of the shared Letra37 engine helpers.              |
 //|                                                                  |
 //| Ports the genuinely decision-improving parts of v60:             |
@@ -14,8 +14,9 @@
 //|     netBias / pressure / primary attractor / FEZ / forward path) |
 //|   - Time Intelligence Engine (MN/W/D/H4/H1 cycle stack)          |
 //|   - Compact Energy/Resolution/Attractor read                     |
-//|   - Senseei meta-intelligence (align/conflict/threat/confidence/ |
-//|     intent/timing/opportunity/ACTION)                            |
+//|   (The Senseei meta-DECISION layer is intentionally NOT ported - |
+//|    Letra's own decision stays the authority. This module only    |
+//|    supplies FEATURES / CONTEXT consumed by Letra37_EA.)          |
 //|   - F72 curve-life score ("is the trade alive?") for management  |
 //+------------------------------------------------------------------+
 #include "Letra37_Engine.mqh"
@@ -23,16 +24,13 @@
 //==================================================================
 // SENSEEI INPUTS (distinct names; engine inputs are reused)
 //==================================================================
-input group "Senseei (v60) - Network"
+input group "Letra37 - v60 Context (Network)"
 input double sIn_wickFrac    = 0.30;   // FU spike: min wick / range
 input int    sIn_lookback    = 3;      // FU spike: structure lookback
 input int    sIn_authMin     = 45;     // Min node authority
 input int    sIn_nodeMax     = 250;    // Max remembered nodes
 input int    sIn_dormantBars = 120;    // Bars until dormant
 input int    sIn_historyBars = 600;    // Bars until historical
-input group "Senseei (v60) - Decision"
-input int    sIn_minConf     = 55;     // Min confidence to ATTACK
-input int    sIn_maxThreat   = 45;     // Max threat to ATTACK
 
 //==================================================================
 // ADAPTIVE TIMEFRAME LADDER  (rung 3 = chart timeframe)
@@ -228,7 +226,7 @@ void ComputeSE_V60(const ENUM_TIMEFRAMES tfReq, const int bars,
 
 
 //==================================================================
-// SENSEEI GLOBAL STATE + OUTPUTS
+// V60 CONTEXT STATE + OUTPUTS
 //==================================================================
 SEV60     v1,v2,v3,v4,v5,v6;          // ladder rungs 1..6 (rung3 = chart = canonical)
 FUPoolOut sfpMN,sfpW,sfpD,sfpH4,sfpH1,sfpM15,sfpM5;
@@ -237,20 +235,19 @@ FUPoolOut sfpMN,sfpW,sfpD,sfpH4,sfpH1,sfpM15,sfpM5;
 double sn_px[],sn_mid[],sn_sc[]; int sn_dir[],sn_wt[],sn_state[],sn_bar[],sn_rev[];
 double sn_pv[7];                       // last pushed tip per TF (MN,W,D,H4,H1,M15,M5)
 
-//--- Senseei decision outputs (last closed bar) ---
-int    sen_master=0, sen_waveDir=0, sen_stackDir=0, sen_netBias=0, sen_pdir=0, sen_timeDir=0;
-double sen_stackPct=0, sen_alignment=0, sen_conflict=0, sen_threat=0, sen_confidence=0, sen_oppScore=0;
-double sen_pressure=0, sen_residual=0, sen_attractorScore=0, sen_timeAlign=0, sen_timeConflict=0;
-int    sen_resCode=0, sen_eligN=0;
-string sen_action="WAIT", sen_intent="BALANCE", sen_timing="—", sen_opportunity="NONE", sen_phase="Point 4 Origin";
-double sen_entry=NA, sen_stop=NA, sen_t1=NA, sen_t2=NA, sen_t3=NA, sen_attractorPx=NA, sen_netTarget=NA, sen_fezHi=NA, sen_fezLo=NA;
+//--- v60 FEATURE outputs (last closed bar) — NO decision layer ---
+int    ctx_waveDir=0, ctx_stackDir=0, ctx_netBias=0, ctx_pdir=0, ctx_timeDir=0;
+double ctx_stackPct=0, ctx_pressure=0, ctx_residual=0, ctx_attractorScore=0, ctx_timeAlign=0, ctx_timeConflict=0;
+int    ctx_resCode=0, ctx_eligN=0;
+string ctx_phase="Point 4 Origin";
+double ctx_entry=NA, ctx_stop=NA, ctx_t1=NA, ctx_t2=NA, ctx_t3=NA, ctx_attractorPx=NA, ctx_netTarget=NA, ctx_fezHi=NA, ctx_fezLo=NA;
 //--- curve life (management) ---
-double sen_life=50.0, sen_cpForce=0; string sen_cpState="NEUTRAL", sen_alive="WEAKENING";
+double ctx_life=50.0, ctx_cpForce=0; string ctx_cpState="NEUTRAL", ctx_alive="WEAKENING";
 //--- narrative lineage / ownership migration (context) ---
-double sen_narrative=50.0; string sen_narrState="HOLDING"; bool sen_converging=false;
-double sen_chainVitality=50.0, sen_mig50=NA, sen_mig618=NA, sen_retrX=50.0;
+double ctx_narrative=50.0; string ctx_narrState="HOLDING"; bool ctx_converging=false;
+double ctx_chainVitality=50.0, ctx_mig50=NA, ctx_mig618=NA, ctx_retrX=50.0;
 //--- TIE detail ---
-string sen_h1Timing="—"; double sen_wp=0, sen_atr=0;
+string ctx_h1Timing="—"; double ctx_wp=0, ctx_atr=0;
 
 double f_authSen(const int i){ return(sn_sc[i]+sn_wt[i]*4.0+sn_rev[i]*3.0); }
 void SnPush(const double px,const double mid,const int dir,const double sc,const int wt,const int barI)
@@ -273,9 +270,9 @@ void CycleRead(const ENUM_TIMEFRAMES tf,double &o,double &h,double &l,double &ph
 }
 
 //==================================================================
-// SENSEEI DRIVER — full recompute -> sets sen_* for last closed bar
+// SENSEEI DRIVER — full recompute -> sets ctx_* for last closed bar
 //==================================================================
-void SenseeiRun(const int bars)
+void ContextRun(const int bars)
 {
    TFData d; if(!LoadTF(_Period,bars,d)) return;
    int N=d.n; int warmup=MathMax(2*structLen,2*pivotLen)+effLen+10;
@@ -450,23 +447,7 @@ void SenseeiRun(const int bars)
    if(naf(attractorPx)) attractorPx=netTarget;
    double attractorScore=fmin2(residual*0.40+(resCode==0?30.0:resCode==1?20.0:5.0)+(!naf(attractorPx)?fmax2(0.0,30.0-MathAbs(clL-attractorPx)/fmax2(atrL,1e-10)*5.0):0.0),100.0);
 
-   //--- Senseei meta-intelligence ---
-   int vt1=waveDir, vt2=stackDir, vt3=netBias, vt4=pdir;
-   int sum=vt1+vt2+vt3+vt4;
-   int master=sum>0?1:sum<0?-1:0;
-   int cast=(vt1!=0?1:0)+(vt2!=0?1:0)+(vt3!=0?1:0)+(vt4!=0?1:0);
-   int forV=(vt1==master&&vt1!=0?1:0)+(vt2==master&&vt2!=0?1:0)+(vt3==master&&vt3!=0?1:0)+(vt4==master&&vt4!=0?1:0);
-   double alignment=cast>0?(double)forV/cast*100.0:50.0;
-   double conflict=cast>0?(double)(cast-forV)/cast*100.0:0.0;
-   double threat=clamp(conflict*0.40+residual*0.28+timeConflict*0.12+(pdir!=0&&pdir!=master?18.0:0.0)+(resCode==1?10.0:0.0),0.0,100.0);
-   double confidence=clamp(alignment*0.40+timeAlign*0.12+stackPct*0.18+attractorScore*0.15+fmin2(15.0,eligN*1.2)-threat*0.20,0.0,100.0);
-   string timing=(resCode==2)?"RESOLVED":c_wp<15?"VERY EARLY":c_wp<35?"EARLY":c_wp<55?"DEVELOPING":c_wp<80?"MID CYCLE":c_wp<96?"LATE":"TERMINAL";
-   string intent=conflict>55?"ABSORPTION":(phaseStr=="Expansion"||phaseStr=="New High"||phaseStr=="New Low")?"EXPANSION":phaseStr=="Expansion Pre-Convexity"?"CONTINUATION":(phaseStr=="Expansion Induction"||phaseStr=="Induction")?"RESOLUTION":(phaseStr=="Expansion Liquidity"||phaseStr=="Liquidation"||phaseStr=="Terminal Curve")?"DELIVERY":master==0?"BALANCE":"CONTINUATION";
-   double oppScore=clamp(alignment*0.40+attractorScore*0.30+stackPct*0.30-threat*0.35,0.0,100.0);
-   string opportunity=master==0?"NONE":conflict>60?"DEVELOPING":oppScore<20?"NONE":oppScore<40?"DEVELOPING":oppScore<62?"GOOD":oppScore<82?"STRONG":"EXCEPTIONAL";
-   string action=master==0?"WAIT":conflict>60?"WAIT":resCode==2?"MANAGE / EXIT":((opportunity=="STRONG"||opportunity=="EXCEPTIONAL")&&confidence>=sIn_minConf&&threat<sIn_maxThreat)?"ATTACK":(opportunity=="GOOD"||opportunity=="STRONG")?"PREPARE":"WAIT";
-
-   //--- attack levels ---
+   //--- attack / level context (entry zone mid) ---
    double entry=(!naf(c_ft)&&!naf(c_fb))?(c_ft+c_fb)/2.0:NA;
 
    //--- F72 curve life ("is the trade alive?") ---
@@ -484,15 +465,14 @@ void SenseeiRun(const int bars)
    double mig50=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.5*(c_inv-cExtreme);
    double mig618=(naf(c_inv)||naf(cExtreme)||cExtreme==c_inv)?NA:cExtreme+0.618*(c_inv-cExtreme);
 
-   //--- publish ---
-   sen_master=master; sen_waveDir=waveDir; sen_stackDir=stackDir; sen_netBias=netBias; sen_pdir=pdir; sen_timeDir=timeDir;
-   sen_stackPct=stackPct; sen_alignment=alignment; sen_conflict=conflict; sen_threat=threat; sen_confidence=confidence; sen_oppScore=oppScore;
-   sen_pressure=pressure; sen_residual=residual; sen_attractorScore=attractorScore; sen_timeAlign=timeAlign; sen_timeConflict=timeConflict;
-   sen_resCode=resCode; sen_eligN=eligN; sen_action=action; sen_intent=intent; sen_timing=timing; sen_opportunity=opportunity; sen_phase=phaseStr;
-   sen_entry=entry; sen_stop=c_inv; sen_t1=nz(c_tgt,attractorPx); sen_t2=t2; sen_t3=t3; sen_attractorPx=attractorPx; sen_netTarget=netTarget; sen_fezHi=fezHi; sen_fezLo=fezLo;
-   sen_life=life; sen_cpForce=cpForce; sen_cpState=cpState; sen_alive=aliveTx; sen_h1Timing=h1Timing; sen_wp=c_wp; sen_atr=atrL;
-   sen_narrative=narrative; sen_narrState=narrState; sen_converging=converging; sen_chainVitality=chainVitality;
-   sen_mig50=mig50; sen_mig618=mig618; sen_retrX=retrX;
+   //--- publish FEATURE outputs only (NO Senseei decision layer) ---
+   ctx_waveDir=waveDir; ctx_stackDir=stackDir; ctx_netBias=netBias; ctx_pdir=pdir; ctx_timeDir=timeDir;
+   ctx_stackPct=stackPct; ctx_pressure=pressure; ctx_residual=residual; ctx_attractorScore=attractorScore;
+   ctx_timeAlign=timeAlign; ctx_timeConflict=timeConflict; ctx_resCode=resCode; ctx_eligN=eligN; ctx_phase=phaseStr;
+   ctx_entry=entry; ctx_stop=c_inv; ctx_t1=nz(c_tgt,attractorPx); ctx_t2=t2; ctx_t3=t3; ctx_attractorPx=attractorPx; ctx_netTarget=netTarget; ctx_fezHi=fezHi; ctx_fezLo=fezLo;
+   ctx_life=life; ctx_cpForce=cpForce; ctx_cpState=cpState; ctx_alive=aliveTx; ctx_h1Timing=h1Timing; ctx_wp=c_wp; ctx_atr=atrL;
+   ctx_narrative=narrative; ctx_narrState=narrState; ctx_converging=converging; ctx_chainVitality=chainVitality;
+   ctx_mig50=mig50; ctx_mig618=mig618; ctx_retrX=retrX;
 }
 
-#endif // __LETRA37_SENSEEI_MQH__
+#endif // __LETRA37_CONTEXT_MQH__

@@ -21,7 +21,7 @@
 #include <Trade/PositionInfo.mqh>
 #include <Trade/SymbolInfo.mqh>
 #include <Trade/AccountInfo.mqh>
-#include "Letra37_Senseei.mqh"
+#include "Letra37_Context.mqh"
 
 //==================================================================
 // EA INPUT ENUMS
@@ -105,7 +105,7 @@ input ulong         InpDeviation        = 20;           // Max slippage (points)
 input string        InpComment          = "Letra37";    // Order comment
 input bool          InpShowStatus       = true;         // Show status panel (Comment)
 
-input group "Letra37 EA - v60 Context Filters (Senseei engine)"
+input group "Letra37 EA - v60 Context Filters"
 input bool   InpUseV60Context   = true;    // Compute v60 context (network / curve-life / TIE / narrative)
 input bool   InpReqNetAgree     = true;    // Require Invisible-Network bias to agree (or neutral)
 input bool   InpReqStackAgree   = false;   // Require v60 fractal stack to agree
@@ -323,7 +323,7 @@ void ComputeEngine()
    if(got<warmup+5) return;
    ResetState();
    EngineRun(got,eaT,eaO,eaH,eaL,eaC,eaVol,MathMax(warmup,got-InpEngineBars));
-   if(InpUseV60Context) SenseeiRun(InpEngineBars);   // v60 context (does not alter Letra cur_* decision)
+   if(InpUseV60Context) ContextRun(InpEngineBars);   // v60 context (does not alter Letra cur_* decision)
 }
 
 //==================================================================
@@ -359,13 +359,13 @@ bool PassesFilters(const int dir)
    if(cur_invInvalidated) return(false);
    //--- v60 context filters (Letra still decides; these only confirm/veto) ---
    if(InpUseV60Context){
-      if(InpReqNetAgree   && !(sen_netBias==dir || sen_netBias==0)) return(false);
-      if(InpReqStackAgree && sen_stackDir!=dir) return(false);
-      if(InpReqCurveAlive && sen_life<InpCurveAliveMin) return(false);
-      if(InpReqNarrative  && sen_narrState=="WEAKENING") return(false);
-      if(InpReqTimeAlign  && sen_timeAlign<InpMinTimeAlign) return(false);
-      if(InpBlockV60Terminal && (sen_phase=="Liquidation"||sen_phase=="Terminal Curve") && sen_waveDir!=0 && sen_waveDir!=dir) return(false);
-      if(InpTIEBlockOpposed && sen_timeAlign>=InpTIEStrongAlign && sen_timeDir!=0 && sen_timeDir!=dir) return(false);
+      if(InpReqNetAgree   && !(ctx_netBias==dir || ctx_netBias==0)) return(false);
+      if(InpReqStackAgree && ctx_stackDir!=dir) return(false);
+      if(InpReqCurveAlive && ctx_life<InpCurveAliveMin) return(false);
+      if(InpReqNarrative  && ctx_narrState=="WEAKENING") return(false);
+      if(InpReqTimeAlign  && ctx_timeAlign<InpMinTimeAlign) return(false);
+      if(InpBlockV60Terminal && (ctx_phase=="Liquidation"||ctx_phase=="Terminal Curve") && ctx_waveDir!=0 && ctx_waveDir!=dir) return(false);
+      if(InpTIEBlockOpposed && ctx_timeAlign>=InpTIEStrongAlign && ctx_timeDir!=0 && ctx_timeDir!=dir) return(false);
    }
    return(true);
 }
@@ -496,11 +496,11 @@ void ManagePositions()
       if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
       if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
       //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
-      if(InpUseV60Context && InpUseCurveLifeExit && sen_life<=InpCurveDeadBelow && dir==sen_waveDir){ trade.PositionClose(tk); continue; }
+      if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ trade.PositionClose(tk); continue; }
       //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
-      if(InpUseV60Context && InpUseNarrativeMgmt && dir==sen_waveDir){
-         if(sen_chainVitality<=InpChainExitBelow){ trade.PositionClose(tk); continue; }
-         if(sen_narrState=="WEAKENING" && !sen_converging){
+      if(InpUseV60Context && InpUseNarrativeMgmt && dir==ctx_waveDir){
+         if(ctx_chainVitality<=InpChainExitBelow){ trade.PositionClose(tk); continue; }
+         if(ctx_narrState=="WEAKENING" && !ctx_converging){
             double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
             bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
             if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
@@ -533,8 +533,8 @@ void ManagePositions()
          double dist=(InpTrailMode==TRAIL_ATR?atr*InpTrailAtrMult:InpTrailPoints*_Point);
          double minD=MinStopDist()+_Point; if(dist<minD) dist=minD;
          double newSL=(dir==1? mkt-dist : mkt+dist);
-         if(InpUseV60Context && InpUseMigrationTrail && sen_cpState=="PERSISTING" && dir==sen_waveDir && !naf(sen_mig618)){
-            double m=sen_mig618;
+         if(InpUseV60Context && InpUseMigrationTrail && ctx_cpState=="PERSISTING" && dir==ctx_waveDir && !naf(ctx_mig618)){
+            double m=ctx_mig618;
             if((dir==1 && m<mkt) || (dir==-1 && m>mkt)) newSL=m;   // defend the migrated 0.618 band
          }
          newSL=NormPrice(newSL);
@@ -566,10 +566,10 @@ void ShowStatus()
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";
-      s+="\nNet "+(sen_netBias==1?"BULL":sen_netBias==-1?"BEAR":"-")+"  Stack "+(sen_stackDir==1?"BULL":sen_stackDir==-1?"BEAR":"-")+" "+R0(sen_stackPct)+"%  press "+R0(sen_pressure);
-      s+="\nCurve "+sen_alive+"  life "+R0(sen_life)+"  force "+sen_cpState;
-      s+="\nv60Phase "+sen_phase+"  Narr "+sen_narrState+" "+R0(sen_narrative)+(sen_converging?" (converging)":"");
-      s+="\nTime "+(sen_timeDir==1?"CLIMB":sen_timeDir==-1?"DIVE":"LEVEL")+" "+R0(sen_timeAlign)+"%  H1 "+sen_h1Timing+"  attr "+PXs(sen_attractorPx);
+      s+="\nNet "+(ctx_netBias==1?"BULL":ctx_netBias==-1?"BEAR":"-")+"  Stack "+(ctx_stackDir==1?"BULL":ctx_stackDir==-1?"BEAR":"-")+" "+R0(ctx_stackPct)+"%  press "+R0(ctx_pressure);
+      s+="\nCurve "+ctx_alive+"  life "+R0(ctx_life)+"  force "+ctx_cpState;
+      s+="\nv60Phase "+ctx_phase+"  Narr "+ctx_narrState+" "+R0(ctx_narrative)+(ctx_converging?" (converging)":"");
+      s+="\nTime "+(ctx_timeDir==1?"CLIMB":ctx_timeDir==-1?"DIVE":"LEVEL")+" "+R0(ctx_timeAlign)+"%  H1 "+ctx_h1Timing+"  attr "+PXs(ctx_attractorPx);
    }
    Comment(s);
 }
