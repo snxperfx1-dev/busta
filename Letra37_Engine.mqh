@@ -1755,11 +1755,11 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
    //==============================================================
    // SECTION 21 — ENTRY SIGNALS
    //==============================================================
-   bool gradeOK=useStrictStructure?(grade=="A+"||grade=="A"||grade=="B"):(grade=="A+"||grade=="A"||grade=="B"||grade=="C");
+   // (grade is no longer an entry gate - removed per design; FU + Invisible Network drive targets)
    bool beliefEntryLong=direction==1&&ie1a_currentPhase=="Demand Return"&&g_demandReturnBelief>50&&g_expansionBelief<60&&g_absorptionBelief>25;
    bool beliefEntryShort=direction==-1&&ie1a_currentPhase=="Supply Return"&&g_demandReturnBelief>50&&g_expansionBelief<60&&g_absorptionBelief>25;
-   bool longSignal=showSignals&&beliefEntryLong&&htfAligned&&gradeOK&&!signalLocked&&!withinLongLock&&edgePassesFilter&&preConvOK_long&&inducOK_long&&structLongOK&&liqSweepOK&&obFresh&&htfLongOK&&erf_entryGate;
-   bool shortSignal=showSignals&&beliefEntryShort&&htfAligned&&gradeOK&&!signalLocked&&!withinShortLock&&edgePassesFilter&&preConvOK_short&&inducOK_short&&structShortOK&&liqSweepOK&&obFresh&&htfShortOK&&erf_entryGate;
+   bool longSignal=showSignals&&beliefEntryLong&&htfAligned&&!signalLocked&&!withinLongLock&&edgePassesFilter&&preConvOK_long&&inducOK_long&&structLongOK&&liqSweepOK&&obFresh&&htfLongOK&&erf_entryGate;
+   bool shortSignal=showSignals&&beliefEntryShort&&htfAligned&&!signalLocked&&!withinShortLock&&edgePassesFilter&&preConvOK_short&&inducOK_short&&structShortOK&&liqSweepOK&&obFresh&&htfShortOK&&erf_entryGate;
    if(longSignal){ g_lastSignalBar=i; g_lastLongBar=i; g_engineArmed=false; }
    if(shortSignal){ g_lastSignalBar=i; g_lastShortBar=i; g_engineArmed=false; }
    gBarLong=longSignal; gBarShort=shortSignal; gBarLongPx=lo-atr*0.7; gBarShortPx=hi+atr*0.7;
@@ -2039,7 +2039,8 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
    double te_tp2=te_tp2_valid?eae_primaryAttractorPrice:NA;
    bool te_tp3_valid=in_teTertiaryOn&&!naf(eae_tertiaryAttractorPrice)&&(direction==1?eae_tertiaryAttractorPrice>cl:direction==-1?eae_tertiaryAttractorPrice<cl:false);
    double te_tp3=te_tp3_valid?eae_tertiaryAttractorPrice:NA;
-   double te_rr_tp1=(!naf(te_tp1)&&!naf(inv_riskInPts)&&inv_riskInPts>0)?MathAbs(te_tp1-cl)/inv_riskInPts:NA;
+   double _teTp1eff=!naf(te_tp1)?te_tp1:te_tp2;   // FRZ-free: fall back to the (network/EAE) attractor target
+   double te_rr_tp1=(!naf(_teTp1eff)&&!naf(inv_riskInPts)&&inv_riskInPts>0)?MathAbs(_teTp1eff-cl)/inv_riskInPts:NA;
    bool te_rrGate=!naf(te_rr_tp1)&&te_rr_tp1>=in_rrMinimum;
    string te_expectedPath=(re_resolutionState=="RESOLVED"&&mce_execAlignmentScore>=70)?"Direct":(ie1a_currentPhase=="Demand Return"||ie1a_currentPhase=="Supply Return")?"Direct":rot_transferProbability>50?"Retracement First":re_resolutionState=="UNRESOLVED"?"Range Then Breakout":"Direct";
    //--- V72.7 TQE ---

@@ -1780,11 +1780,11 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
    //==============================================================
    // SECTION 21 — ENTRY SIGNALS
    //==============================================================
-   bool gradeOK=useStrictStructure?(grade=="A+"||grade=="A"||grade=="B"):(grade=="A+"||grade=="A"||grade=="B"||grade=="C");
+   // (grade is no longer an entry gate - removed per design; FU + Invisible Network drive targets)
    bool beliefEntryLong=direction==1&&ie1a_currentPhase=="Demand Return"&&g_demandReturnBelief>50&&g_expansionBelief<60&&g_absorptionBelief>25;
    bool beliefEntryShort=direction==-1&&ie1a_currentPhase=="Supply Return"&&g_demandReturnBelief>50&&g_expansionBelief<60&&g_absorptionBelief>25;
-   bool longSignal=showSignals&&beliefEntryLong&&htfAligned&&gradeOK&&!signalLocked&&!withinLongLock&&edgePassesFilter&&preConvOK_long&&inducOK_long&&structLongOK&&liqSweepOK&&obFresh&&htfLongOK&&erf_entryGate;
-   bool shortSignal=showSignals&&beliefEntryShort&&htfAligned&&gradeOK&&!signalLocked&&!withinShortLock&&edgePassesFilter&&preConvOK_short&&inducOK_short&&structShortOK&&liqSweepOK&&obFresh&&htfShortOK&&erf_entryGate;
+   bool longSignal=showSignals&&beliefEntryLong&&htfAligned&&!signalLocked&&!withinLongLock&&edgePassesFilter&&preConvOK_long&&inducOK_long&&structLongOK&&liqSweepOK&&obFresh&&htfLongOK&&erf_entryGate;
+   bool shortSignal=showSignals&&beliefEntryShort&&htfAligned&&!signalLocked&&!withinShortLock&&edgePassesFilter&&preConvOK_short&&inducOK_short&&structShortOK&&liqSweepOK&&obFresh&&htfShortOK&&erf_entryGate;
    if(longSignal){ g_lastSignalBar=i; g_lastLongBar=i; g_engineArmed=false; }
    if(shortSignal){ g_lastSignalBar=i; g_lastShortBar=i; g_engineArmed=false; }
    gBarLong=longSignal; gBarShort=shortSignal; gBarLongPx=lo-atr*0.7; gBarShortPx=hi+atr*0.7;
@@ -2064,7 +2064,8 @@ void ProcessBar(const int i,const double &o[],const double &h[],const double &l[
    double te_tp2=te_tp2_valid?eae_primaryAttractorPrice:NA;
    bool te_tp3_valid=in_teTertiaryOn&&!naf(eae_tertiaryAttractorPrice)&&(direction==1?eae_tertiaryAttractorPrice>cl:direction==-1?eae_tertiaryAttractorPrice<cl:false);
    double te_tp3=te_tp3_valid?eae_tertiaryAttractorPrice:NA;
-   double te_rr_tp1=(!naf(te_tp1)&&!naf(inv_riskInPts)&&inv_riskInPts>0)?MathAbs(te_tp1-cl)/inv_riskInPts:NA;
+   double _teTp1eff=!naf(te_tp1)?te_tp1:te_tp2;   // FRZ-free: fall back to the (network/EAE) attractor target
+   double te_rr_tp1=(!naf(_teTp1eff)&&!naf(inv_riskInPts)&&inv_riskInPts>0)?MathAbs(_teTp1eff-cl)/inv_riskInPts:NA;
    bool te_rrGate=!naf(te_rr_tp1)&&te_rr_tp1>=in_rrMinimum;
    string te_expectedPath=(re_resolutionState=="RESOLVED"&&mce_execAlignmentScore>=70)?"Direct":(ie1a_currentPhase=="Demand Return"||ie1a_currentPhase=="Supply Return")?"Direct":rot_transferProbability>50?"Retracement First":re_resolutionState=="UNRESOLVED"?"Range Then Breakout":"Direct";
    //--- V72.7 TQE ---
@@ -2869,7 +2870,7 @@ void ContextRun(const int bars)
 enum ENUM_SIG_SOURCE { SIG_ENGINE, SIG_V72, SIG_EITHER, SIG_BOTH };   // arrows / DOE / either(OR) / both(AND)
 enum ENUM_LOT_MODE   { LOT_FIXED, LOT_RISK_PCT };
 enum ENUM_SL_MODE    { SL_ENGINE, SL_ATR, SL_FIXED };
-enum ENUM_TP_MODE    { TP_ENGINE_TP1, TP_ENGINE_TP2, TP_RR, TP_ATR };
+enum ENUM_TP_MODE    { TP_NETWORK, TP_RR, TP_ATR };   // FU/Invisible-Network attractor / RR / ATR
 enum ENUM_TRAIL_MODE { TRAIL_ATR, TRAIL_POINTS };
 enum ENUM_MIN_GRADE  { G_APLUS, G_A, G_B, G_C, G_D };
 
@@ -2887,13 +2888,8 @@ input bool   InpUseLimitEntry           = false;        // Use limit at engine e
 input int    InpPendingExpiryBars       = 6;            // Pending order expiry (bars; 0=GTC)
 
 input group "Letra37 EA - Entry Filters"
-input bool          InpUseGradeFilter   = true;         // Require engine grade >= min
-input ENUM_MIN_GRADE InpMinGrade        = G_B;          // Min engine grade
-input bool          InpUseTqeFilter     = true;         // Require V72 TQE grade >= min
-input ENUM_MIN_GRADE InpMinTqeGrade     = G_B;          // Min TQE grade
 input bool          InpRequireErfGate   = true;         // Require ERF entry gate open
 input bool          InpRequireHtfAlign  = false;        // Require HTF alignment with trade dir
-input bool          InpRequireDoeAction = true;         // (deprecated; entry source enum now controls this)
 input double        InpMinConfidence    = 0.0;          // Min DOE confidence % (0=off)
 
 input group "Letra37 EA - Risk / Sizing"
@@ -2910,7 +2906,7 @@ input int           InpSLFixedPoints    = 300;          // SL fixed points (SL_F
 input double        InpSLEngineBufATR   = 0.10;         // Extra ATR buffer beyond engine stop
 
 input group "Letra37 EA - Take Profit"
-input ENUM_TP_MODE  InpTPMode           = TP_ENGINE_TP1;// Take-profit source
+input ENUM_TP_MODE  InpTPMode           = TP_NETWORK;   // Take-profit source (FU / Invisible-Network attractor)
 input double        InpTPrr             = 2.0;          // TP = RR * risk (TP_RR)
 input double        InpTPAtrMult        = 3.0;          // TP = ATR * mult (TP_ATR)
 input bool          InpUsePartial       = true;         // Partial close at first target
@@ -3191,8 +3187,6 @@ bool PassesFilters(const int dir)
 {
    if(dir==1 && !InpTradeLongs) return(false);
    if(dir==-1&& !InpTradeShorts) return(false);
-   if(InpUseGradeFilter && GradeRank(cur_grade)<MinGradeRank(InpMinGrade)) return(false);
-   if(InpUseTqeFilter   && GradeRank(cur_tqeGrade)<MinGradeRank(InpMinTqeGrade)) return(false);
    if(InpRequireErfGate && !cur_erfEntryGate) return(false);
    if(InpRequireHtfAlign && !(cur_htfAlign==dir || cur_htfAlign==0)) return(false);
    if(InpMinConfidence>0.0 && cur_doeConfidence<InpMinConfidence) return(false);
@@ -3233,10 +3227,14 @@ double ComputeTP(const int dir,const double entry,const double sl)
    double atr=cur_atr; if(atr<=0) atr=10*_Point;
    double risk=MathAbs(entry-sl);
    double tp=0.0;
-   if(InpTPMode==TP_ENGINE_TP1 && !naf(cur_teTp1)) tp=cur_teTp1;
-   else if(InpTPMode==TP_ENGINE_TP2 && !naf(cur_teTp2)) tp=cur_teTp2;
-   else if(InpTPMode==TP_ATR) tp=entry+(dir==1? atr*InpTPAtrMult : -atr*InpTPAtrMult);
-   else tp=entry+(dir==1? risk*InpTPrr : -risk*InpTPrr);
+   if(InpTPMode==TP_NETWORK){
+      // FU pool / Invisible-Network attractor — the magnet price is heading for
+      tp = !naf(ctx_netTarget)?ctx_netTarget : !naf(ctx_attractorPx)?ctx_attractorPx : entry+(dir==1? risk*InpTPrr : -risk*InpTPrr);
+   } else if(InpTPMode==TP_ATR){
+      tp=entry+(dir==1? atr*InpTPAtrMult : -atr*InpTPAtrMult);
+   } else {
+      tp=entry+(dir==1? risk*InpTPrr : -risk*InpTPrr);
+   }
    //--- validate side; fall back to RR if engine target is on the wrong side ---
    if((dir==1 && tp<=entry) || (dir==-1 && tp>=entry))
       tp=entry+(dir==1? risk*InpTPrr : -risk*InpTPrr);
@@ -3301,7 +3299,8 @@ void TryEnter()
          if(pt==0) continue;
          if(PositionGetInteger(POSITION_MAGIC)==(long)InpMagic && PositionGetString(POSITION_SYMBOL)==_Symbol){
             double psl=PositionGetDouble(POSITION_SL);
-            MgRegister(pt,psl,(InpTPMode==TP_ENGINE_TP2&&!naf(cur_teTp2))?cur_teTp2:cur_teTp1,dir);
+            double _tp1net=!naf(ctx_netTarget)?ctx_netTarget:ctx_attractorPx;   // FU/Network target for partial
+            MgRegister(pt,psl,_tp1net,dir);
             break;
          }
       }
@@ -3400,8 +3399,8 @@ void ShowStatus()
    s+="DOE    : "+cur_doeAction+"  conf "+R0(cur_doeConfidence)+"%  bias "+cur_doeBias+"\n";
    s+="Grade  : eng "+cur_grade+"  TQE "+cur_tqeGrade+"  risk "+cur_tqeRisk+"\n";
    s+="Opp    : "+cur_oppState+" "+R0(cur_oppProgress)+"%   ERF gate "+(cur_erfEntryGate?"OPEN":"SHUT")+"\n";
-   s+="Stop   : "+PXs(cur_invActiveStop)+(cur_invInvalidated?" [INVALID]":"")+"   TP1 "+PXs(cur_teTp1)+"  TP2 "+PXs(cur_teTp2)+"\n";
-   s+="Target : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
+   s+="Stop   : "+PXs(cur_invActiveStop)+(cur_invInvalidated?" [INVALID]":"")+"   Target "+PXs(!naf(ctx_netTarget)?ctx_netTarget:ctx_attractorPx)+"\n";
+   s+="Dest   : "+cur_tplWinnerClass+" "+PXs(cur_tplMainTarget)+" ("+cur_tplSource+")\n";
    s+="Pos    : "+IntegerToString(CountOwnPositions())+"   TradesToday "+IntegerToString(gTradesToday)+(gHalted?"  [HALTED]":"")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
