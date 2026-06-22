@@ -3187,6 +3187,7 @@ input int    InpMinTermShifts    = 0;      // Optional: at the flip zone, requir
 input bool   InpAvoidManipBand   = true;   // Skip entries in the 0.618-0.786 manipulation band (displacement trap) unless at true induction
 input bool   InpRequireTrueInduction = false; // Optional: only enter at the LOWEST flip (true S/D induction zone)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
+input bool   InpOwnerMustAgree   = true;   // OWNERSHIP-FIRST: a multi-TF entry must agree with the curve OWNER's direction (or owner neutral)
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= false;   // Exit when v60 curve-life goes DEAD (OFF - life score dips mid-run and cut winners)
@@ -3597,8 +3598,10 @@ void TryEnter()
       bool _okTrue  = (!InpRequireTrueInduction || !_ctx || ctx_atTrueInduction);
       bool _okFlip  = (!InpRequireAtFlip || !_ctx || ctx_atFlip);
       bool _okShift = (InpMinTermShifts<=0 || !_ctx || !ctx_atFlip || ctx_termShifts>=InpMinTermShifts || ctx_failureSwing);
-      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && _okFlip && _okShift && _okManip && _okTrue){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
+      bool _okOwner = (!InpOwnerMustAgree || !_ctx || cur_ownerDir==0 || cur_mtfEntryDir==cur_ownerDir);   // ownership-first: follow the owning curve
+      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && _okFlip && _okShift && _okManip && _okTrue && _okOwner){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
       else if(cur_mtfEntryDom<InpMinDomTransfer) gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
+      else if(!_okOwner) gEntryBlock=(cur_mtfEntryDir==1?"long":"short")+" vs owner "+cur_curveOwner+" "+(cur_ownerDir==1?"bull":"bear");
       else if(!_okManip) gEntryBlock="manipulation band (0.618-0.786, awaiting true flip)";
       else if(!_okTrue)  gEntryBlock="not at true induction (lowest flip)";
       else if(!_okFlip)  gEntryBlock="not at flip zone ("+DoubleToString(ctx_distFlipAtr,1)+"ATR away)";
