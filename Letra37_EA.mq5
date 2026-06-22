@@ -64,6 +64,10 @@ input double        InpSLAtrMult        = 1.5;          // SL = ATR * mult (SL_A
 input int           InpSLFixedPoints    = 300;          // SL fixed points (SL_FIXED)
 input double        InpSLEngineBufATR   = 0.10;         // Extra ATR buffer beyond engine stop
 input double        InpMinSLAtr         = 1.0;          // Minimum SL distance in ATR (stops getting stopped out instantly)
+input bool          InpUseKeyLevelStop  = true;         // Anchor SL beyond the recent KEY swing high/low (structure)
+input int           InpSwingLookback    = 14;           // Bars scanned for the protective key swing high/low
+input double        InpKeyLevelBufATR   = 0.50;         // Buffer beyond the key high/low (xATR)
+input double        InpMaxSLAtr         = 8.0;          // Safety cap on total SL distance (xATR)
 
 input group "Letra37 EA - Take Profit"
 input ENUM_TP_MODE  InpTPMode           = TP_NETWORK;   // Take-profit source (FU / Invisible-Network attractor)
@@ -383,6 +387,33 @@ bool PassesFilters(const int dir)
    return(true);
 }
 
+//--- protective stop just beyond the recent KEY swing high/low (real structure).
+//--- long  -> below the lowest low of the last InpSwingLookback closed bars
+//--- short -> above the highest high of the last InpSwingLookback closed bars
+//--- returns 0.0 when disabled or unavailable.
+double KeyLevelStop(const int dir,const double entry)
+{
+   if(!InpUseKeyLevelStop) return(0.0);
+   double atr=cur_atr; if(atr<=0) atr=10*_Point;
+   int lb=InpSwingLookback; if(lb<2) lb=2;
+   double buf=InpKeyLevelBufATR*atr;
+   if(dir==1){
+      int idx=iLowest(_Symbol,_Period,MODE_LOW,lb,1);     // 1 = skip the still-forming bar
+      if(idx<0) return(0.0);
+      double lo=iLow(_Symbol,_Period,idx);
+      if(lo<=0) return(0.0);
+      double s=lo-buf;
+      return( s<entry ? s : 0.0 );                        // must sit below entry to be valid
+   } else {
+      int idx=iHighest(_Symbol,_Period,MODE_HIGH,lb,1);
+      if(idx<0) return(0.0);
+      double hi=iHigh(_Symbol,_Period,idx);
+      if(hi<=0) return(0.0);
+      double s=hi+buf;
+      return( s>entry ? s : 0.0 );                        // must sit above entry to be valid
+   }
+}
+
 double ComputeSL(const int dir,const double entry)
 {
    double atr=cur_atr; if(atr<=0) atr=10*_Point;
@@ -394,10 +425,20 @@ double ComputeSL(const int dir,const double entry)
    } else {
       sl=entry + (dir==1? -atr*InpSLAtrMult : atr*InpSLAtrMult);
    }
+   //--- push the stop BEYOND the recent key swing high/low so structure protects it ---
+   double ks=KeyLevelStop(dir,entry);
+   if(ks!=0.0){
+      if(dir==1)  sl=MathMin(sl,ks);   // long: take the lower (more protective) stop
+      else        sl=MathMax(sl,ks);   // short: take the higher (more protective) stop
+   }
    //--- enforce correct side + minimum stop distance (broker min AND >= InpMinSLAtr*ATR) ---
    double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*atr);
    if(dir==1  && sl>entry-minD) sl=entry-minD;
    if(dir==-1 && sl<entry+minD) sl=entry+minD;
+   //--- safety cap so a runaway swing can't create an absurd stop ---
+   double maxD=InpMaxSLAtr*atr;
+   if(dir==1  && sl<entry-maxD) sl=entry-maxD;
+   if(dir==-1 && sl>entry+maxD) sl=entry+maxD;
    return(NormPrice(sl));
 }
 
@@ -470,9 +511,18 @@ void TryEnter()
    if(fuEntry && !naf(ctx_fuTip)){
       double a=cur_atr; if(a<=0) a=10*_Point;
       slBase=(dir==1? ctx_fuTip - InpMinSLAtr*a : ctx_fuTip + InpMinSLAtr*a);   // stop BEYOND the FU wick extreme
+      //--- and push it beyond the recent key swing high/low (whichever protects more) ---
+      double ks=KeyLevelStop(dir,entry);
+      if(ks!=0.0){
+         if(dir==1)  slBase=MathMin(slBase,ks);
+         else        slBase=MathMax(slBase,ks);
+      }
       double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*a);
       if(dir==1 && slBase>entry-minD) slBase=entry-minD;
       if(dir==-1&& slBase<entry+minD) slBase=entry+minD;
+      double maxD=InpMaxSLAtr*a;                                                // safety cap
+      if(dir==1 && slBase<entry-maxD) slBase=entry-maxD;
+      if(dir==-1&& slBase>entry+maxD) slBase=entry+maxD;
       slBase=NormPrice(slBase);
    } else slBase=ComputeSL(dir,entry);
    double lot=CalcLot(entry,slBase);
