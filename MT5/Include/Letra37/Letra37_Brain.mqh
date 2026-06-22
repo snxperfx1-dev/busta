@@ -64,12 +64,15 @@ struct BrainParams
    double erfReadyConfW;
    double erfEntryThreshold;
    bool   erfGateEnabled;
-   // Return-phase detector (see note in EA): the source's M5 phase machine never
-   // emits "Demand/Supply Return", which the entry gate requires, so entries are
-   // otherwise unreachable. When enabled, the canonical terminal return phase is
-   // derived at decision time from the existing belief/zone state.
+   // Return-phase detector. The V60 14-phase engine emits Demand/Supply Return
+   // natively, so this is OFF by default. When ON it additionally promotes the
+   // entry phase from belief/zone state (legacy behaviour / extra entries).
    bool   enableReturnPhase;
-   // History depth
+   // Adaptive timeframe ladder (V60). rung[0..5] = the six wave engines, climbing
+   // from the chart timeframe so they stay distinct on any chart. rung[2] is the
+   // canonical / execution rung (chart TF) used for physics + base series.
+   ENUM_TIMEFRAMES rung[6];
+   // History depth (per rung position 1..6)
    int    barsM1;
    int    barsM3;
    int    barsM5;
@@ -108,6 +111,20 @@ public:
    double   liqHeatOut;
    double   erfReadinessOut;
    double   demandReturnBeliefOut;
+   //--- V60 14-phase + F72 curve-life outputs ----------------------
+   int      phaseCode;        // se5 canonical phase code 0..14
+   double   compIdx;          // se5 compression index
+   int      recCount;         // se5 recursive-transition count
+   double   domTransfer;      // se5 dominance transfer %
+   double   lifeScore;        // F72 "is the trade alive?" 0..100
+   string   aliveVerdict;     // ALIVE / WEAKENING / DEAD
+   int      lifeTradeDir;     // curve-resolved trade dir (+1/-1/0; may flip vs wave)
+   string   cpState;          // compression persistence: PERSISTING / LEAKING / NEUTRAL
+   string   narrState;        // narrative lineage: STRENGTHENING / HOLDING / WEAKENING
+   string   chainScope;       // chain vitality scope
+   string   htfThreat;        // HTF parent threat: CLEAR / APPROACHING / AT ZONE
+   double   ownerOrigin;      // owner curve origin (migration/stop reference)
+   double   ownerExtreme;     // owner curve extreme
 
    CLetra37Brain(){ ready=false; }
 
@@ -182,21 +199,21 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
 
    //--- fixed-TF structure engines ---------------------------------
    SeBar se1[],se3[],se5[],se15[],se60[],se240[];
-   if(ComputeStructureEngine(symbol,PERIOD_M1,  P.barsM1, sp,se1)  ==0) return(false);
-   if(ComputeStructureEngine(symbol,PERIOD_M3,  P.barsM3, sp,se3)  ==0) return(false);
-   if(ComputeStructureEngine(symbol,PERIOD_M5,  P.barsM5, sp,se5)  ==0) return(false);
-   if(ComputeStructureEngine(symbol,PERIOD_M15, P.barsM15,sp,se15) ==0) return(false);
-   if(ComputeStructureEngine(symbol,PERIOD_H1,  P.barsH1, sp,se60) ==0) return(false);
-   if(ComputeStructureEngine(symbol,PERIOD_H4,  P.barsH4, sp,se240)==0) return(false);
+   if(ComputeStructureEngine(symbol,P.rung[0], P.barsM1, sp,se1)  ==0) return(false);
+   if(ComputeStructureEngine(symbol,P.rung[1], P.barsM3, sp,se3)  ==0) return(false);
+   if(ComputeStructureEngine(symbol,P.rung[2], P.barsM5, sp,se5)  ==0) return(false);
+   if(ComputeStructureEngine(symbol,P.rung[3], P.barsM15,sp,se15) ==0) return(false);
+   if(ComputeStructureEngine(symbol,P.rung[4], P.barsH1, sp,se60) ==0) return(false);
+   if(ComputeStructureEngine(symbol,P.rung[5], P.barsH4, sp,se240)==0) return(false);
 
    //--- HTF belief engines -----------------------------------------
    HtfBel hb1[],hb2[];
    ComputeHtfBeliefs(symbol,P.tf1,P.barsM15,P.atrLen,P.effThresh,P.dispThresh,P.convMult,P.obLookback,hb1);
    ComputeHtfBeliefs(symbol,P.tf2,P.barsH1, P.atrLen,P.effThresh,P.dispThresh,P.convMult,P.obLookback,hb2);
 
-   //--- M5 base series ---------------------------------------------
+   //--- base series (canonical rung = chart TF) --------------------
    MqlRates r[]; ArraySetAsSeries(r,false);
-   int n=CopyRates(symbol,PERIOD_M5,0,P.barsM5,r);
+   int n=CopyRates(symbol,P.rung[2],0,P.barsM5,r);
    if(n>2) n--;                                  // drop the still-forming bar (decide on closed bars)
    if(n<P.atrLen+P.structLen*3+10) return(false);
 
@@ -268,11 +285,21 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
    double liqLvl[],liqWt[]; int liqAge[],liqTyp[];
    ArrayResize(liqLvl,0);ArrayResize(liqWt,0);ArrayResize(liqAge,0);ArrayResize(liqTyp,0);
 
+   //--- F72 curve-life persistent state ----------------------------
+   double f72comp[]; ArrayResize(f72comp,n); for(int i=0;i<n;i++) f72comp[i]=0.0;
+   int    narrDir=0; double legX=LNA,legPBdepth=0.0,narrative=50.0; int supVotes=0,degVotes=0;
+   double wholeChainLife=50.0;
+   double seqRetr[]; ArrayResize(seqRetr,0);
+   double lifeSeq[]; ArrayResize(lifeSeq,0);
+
    // outputs for the final bar
    bool fLong=false,fShort=false,fExit=false,fExitLatch=false;
    string fPhase="",fGrade="",fDirective="";
    double fFinalProb=0,fNetEdge=0,fBuyProb=0,fSellProb=0,fTarget=LNA,fInv=LNA,fFlipTop=LNA,fFlipBot=LNA,fAttr=LNA,fAtr=0;
    int fDir=0,fTradeDir=0,fStackDir=0,fHtfAlign=0; double fCtx=0,fLiq=0,fErf=0,fDRB=0;
+   // F72 final-bar temporaries
+   int fPhaseCode=0,fRec=0,fLifeDir=0; double fComp=0,fDom=0,fLife=50.0,fOwnOrig=LNA,fOwnExt=LNA;
+   string fAlive="—",fCp="NEUTRAL",fNarr="HOLDING",fChain="healthy",fHtf="—";
 
    int warmStart = MathMax(P.structLen*2+2, P.atrLen+5);
 
@@ -789,6 +816,65 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
       if(longSignal){ lastSignalBar=i; lastLongBar=i; engineArmed=false; }
       if(shortSignal){ lastSignalBar=i; lastShortBar=i; engineArmed=false; }
 
+      //--- F72 CURVE-LIFE ("is the trade alive?") -----------------
+      double se5_comp=se5[j5].comp; int se5_recN=se5[j5].rec; double se5_dom=se5[j5].dom;
+      f72comp[i]=se5_comp;
+      double cmpNow=se5_comp;
+      double cmpTighten=(i>=5? cmpNow-f72comp[i-5] : 0.0);
+      int treeDepth=se5_recN;
+      int curveBudgetDepth=MathMax(1,MathMin(4,1+(int)MathRound(se5_comp/33.0)));
+      double eRes=re_residualEnergyScore;
+      double cpForce=MaxD(0.0,MinD(100.0, cmpNow*0.50 + eRes*0.20 - treeDepth*12.0 + MaxD(0.0,cmpTighten)*0.8 + 8.0));
+      string cpStateL=(cpForce>=60.0?"PERSISTING":cpForce<=35.0?"LEAKING":"NEUTRAL");
+      int ownDir=direction;
+      double ownOrig=(direction==1?NZv(point4OriginLow,se5_inv):direction==-1?NZv(point4OriginHigh,se5_inv):se5_inv);
+      double ownExt=(direction==1?NZv(cycleHigh,close):direction==-1?NZv(cycleLow,close):close);
+      bool attacking=(ownDir==1? high>=NZv(ownExt,high): ownDir==-1? low<=NZv(ownExt,low): false);
+      bool trendImp=((ownDir==1&&bullImpulse)||(ownDir==-1&&bearImpulse));
+      bool progressing=(attacking||trendImp);
+      double retrX=((IsNAv(ownExt)||IsNAv(ownOrig)||ownExt==ownOrig)?50.0:MinD(100.0,MathAbs(ownExt-close)/MathMax(MathAbs(ownExt-ownOrig),1e-10)*100.0));
+      bool recursionComplete=(curveBudgetDepth>0 && treeDepth>=curveBudgetDepth);
+      double pFt=se240[j240].ft, pFb=se240[j240].fb, pSh=se240[j240].swH, pSl=se240[j240].swL;
+      double parentThreat=(ownDir==1?((!IsNAv(pFt)&&pFt>close)?pFt:pSh):ownDir==-1?((!IsNAv(pFb)&&pFb<close)?pFb:pSl):LNA);
+      double htfRoomAtr=(IsNAv(parentThreat)?LNA:MathAbs(parentThreat-close)/MathMax(atr,1e-10));
+      string htfThreatL=(IsNAv(htfRoomAtr)?"—":htfRoomAtr>3.0?"CLEAR":htfRoomAtr>1.0?"APPROACHING":"AT ZONE");
+      double life=MaxD(0.0,MinD(100.0, cpForce*0.45 + eRes*0.30 + (cmpTighten>0.0?12.0:0.0)
+         - (recursionComplete&&!progressing?25.0:0.0) - (cpStateL=="LEAKING"&&!progressing?20.0:0.0)
+         + (progressing?28.0:0.0) + (retrX<25.0?16.0:retrX<45.0?6.0:retrX>75.0?-12.0:0.0) + 10.0));
+      // narrative lineage
+      if(ownDir!=narrDir){ narrDir=ownDir; legX=(ownDir==1?high:ownDir==-1?low:LNA); legPBdepth=0.0; narrative=50.0; supVotes=0; degVotes=0; ArrayResize(seqRetr,0); ArrayResize(lifeSeq,0); }
+      if(ownDir!=0 && !IsNAv(ownOrig))
+      {
+         bool newLegX=(ownDir==1? high>NZv(legX,high): low<NZv(legX,low));
+         if(newLegX)
+         {
+            if(legPBdepth>6.0)
+            {
+               bool sup=(legPBdepth<=50.0 && cmpTighten>=-1.0);
+               bool deg=(legPBdepth>=62.0 || cmpTighten<-3.0);
+               int vote=(sup?1:deg?-1:0);
+               supVotes+=(vote==1?1:0); degVotes+=(vote==-1?1:0);
+               narrative=MaxD(0.0,MinD(100.0,narrative+vote*12.0+(cmpTighten>0.0?3.0:-3.0)));
+               int sz=ArraySize(seqRetr); ArrayResize(seqRetr,sz+1); seqRetr[sz]=legPBdepth;
+               if(ArraySize(seqRetr)>5){ for(int k=1;k<ArraySize(seqRetr);k++) seqRetr[k-1]=seqRetr[k]; ArrayResize(seqRetr,ArraySize(seqRetr)-1); }
+               int sz2=ArraySize(lifeSeq); ArrayResize(lifeSeq,sz2+1); lifeSeq[sz2]=life;
+               if(ArraySize(lifeSeq)>5){ for(int k=1;k<ArraySize(lifeSeq);k++) lifeSeq[k-1]=lifeSeq[k]; ArrayResize(lifeSeq,ArraySize(lifeSeq)-1); }
+            }
+            legX=(ownDir==1?high:low); legPBdepth=0.0;
+         }
+         else
+         {
+            double pbd=(MathAbs(NZv(legX,close)-ownOrig)>1e-9?MathAbs(NZv(legX,close)-close)/MathAbs(NZv(legX,close)-ownOrig)*100.0:0.0);
+            legPBdepth=MaxD(legPBdepth,pbd);
+         }
+      }
+      string narrStateL=(narrative>=65.0?"STRENGTHENING":narrative<=35.0?"WEAKENING":"HOLDING");
+      wholeChainLife=wholeChainLife+0.02*(life-wholeChainLife);
+      double chainVitality=(ArraySize(lifeSeq)>=2?MaxD(0.0,MinD(100.0,50.0+(lifeSeq[ArraySize(lifeSeq)-1]-lifeSeq[0]))):wholeChainLife);
+      string chainScopeL=(life>=50.0?"healthy":chainVitality>=50.0?"CURVE only - chain intact":wholeChainLife>=45.0?"CHAIN weakening":"WHOLE CHAIN decaying");
+      string aliveL=(life<=32.0?"DEAD":(life>=60.0||(progressing&&life>=45.0)||(htfThreatL=="AT ZONE"&&life>=45.0))?"ALIVE":"WEAKENING");
+      int lifeDirL=((ownDir==0||(life>32.0&&life<45.0))?0:life<=32.0?-ownDir:ownDir);
+
       //--- TRADE STATE (Section 24) -------------------------------
       bool exitCondition=
          (tradeDirV==1&&bearBOS)||(tradeDirV==-1&&bullBOS)||
@@ -813,6 +899,9 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
          fTarget=se5_tgt; fInv=se5_inv; fFlipTop=flipTop; fFlipBot=flipBot; fAttr=eae_primaryAttractorPrice; fAtr=atr;
          fDir=direction; fTradeDir=tradeDirV; fStackDir=fractalStackDir; fHtfAlign=htfAlign;
          fCtx=fractalCtxScore; fLiq=liqHeat; fErf=erf_tradeReadiness; fDRB=demandReturnBelief;
+         fPhaseCode=se5[j5].phase; fComp=se5_comp; fRec=se5_recN; fDom=se5_dom;
+         fLife=life; fAlive=aliveL; fLifeDir=lifeDirL; fCp=cpStateL; fNarr=narrStateL; fChain=chainScopeL; fHtf=htfThreatL;
+         fOwnOrig=ownOrig; fOwnExt=ownExt;
          barTime=tm[i];
       }
    } // end for
@@ -825,6 +914,9 @@ bool CLetra37Brain::Recompute(const string symbol,const BrainParams &P)
    buyProb=fBuyProb; sellProb=fSellProb; directive=fDirective;
    fractalStackDir=fStackDir; fractalCtxScore=fCtx; htfAlign=fHtfAlign;
    liqHeatOut=fLiq; erfReadinessOut=fErf; demandReturnBeliefOut=fDRB;
+   phaseCode=fPhaseCode; compIdx=fComp; recCount=fRec; domTransfer=fDom;
+   lifeScore=fLife; aliveVerdict=fAlive; lifeTradeDir=fLifeDir; cpState=fCp;
+   narrState=fNarr; chainScope=fChain; htfThreat=fHtf; ownerOrigin=fOwnOrig; ownerExtreme=fOwnExt;
    ready=true;
    return(true);
 }

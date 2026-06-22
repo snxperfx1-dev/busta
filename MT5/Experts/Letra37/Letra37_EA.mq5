@@ -1,23 +1,29 @@
 //+------------------------------------------------------------------+
 //|                                                  Letra37_EA.mq5   |
-//|       Autonomous MT5 port of the "Letra 37" Pine v6 engine.      |
-//|                                                                  |
-//|  A complete reimplementation of the multi-timeframe physics /    |
-//|  structure / wave-lifecycle / belief / Bayesian / ERF decision   |
-//|  stack, wrapped in an institutional execution & risk layer.      |
+//|     Autonomous MT5 port of the "Letra 37" engine, upgraded with  |
+//|     the V60 stack:                                               |
+//|       - 14-PHASE structure engine (f_se) — Expansion ... Demand/ |
+//|         Supply Return, driven by compression / recursion /       |
+//|         dominance transfer.                                      |
+//|       - F72 "is the trade alive?" curve-life score (ALIVE /      |
+//|         WEAKENING / DEAD) for trade management.                  |
+//|       - Invisible Network node engine (netBias, pressure,        |
+//|         primary attractor, FEZ corridor).                        |
+//|       - Adaptive timeframe ladder (climbs above H1).             |
+//|     The Letra decision layer (Bayesian / edge / belief entries)  |
+//|     is kept as the entry authority — no Senseei meta-layer.      |
 //|                                                                  |
 //|  INSTALL:                                                        |
-//|    - Copy  MT5/Include/Letra37   -> <Terminal>/MQL5/Include/      |
-//|    - Copy  MT5/Experts/Letra37   -> <Terminal>/MQL5/Experts/      |
-//|    - Compile Letra37_EA.mq5 in MetaEditor, attach to any M5 chart.|
-//|                                                                  |
-//|  The engine evaluates on each CLOSED M5 bar (execution TF).      |
+//|    - Copy  MT5/Include/Letra37 -> <Terminal>/MQL5/Include/        |
+//|    - Copy  MT5/Experts/Letra37 -> <Terminal>/MQL5/Experts/        |
+//|    - Compile, attach to an M5 chart (works on any TF via ladder).|
 //+------------------------------------------------------------------+
 #property copyright "Letra 37 MT5 Port"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Letra37/Letra37_Brain.mqh>
+#include <Letra37/Letra37_Network.mqh>
 #include <Letra37/Letra37_Trade.mqh>
 
 //====================== ENGINE INPUTS (mirror Pine) ================
@@ -69,15 +75,36 @@ input double  InpErfResidW        = 0.20;   // ERF Delivered Energy Weight
 input double  InpErfConfW         = 0.15;   // ERF Confidence Weight
 input double  InpErfEntryThresh   = 45.0;   // ERF Entry Gate Threshold
 input bool    InpErfGateEnabled   = true;   // ERF Enable Entry Gate
-input bool    InpEnableReturnPhase= true;   // Enable Demand/Supply Return detector (required for entries)
+input bool    InpEnableReturnPhase= false;  // Promote return-phase from belief (off: 14-phase engine emits it natively)
 
-input string  GRPH           = "===== History Depth (bars per TF) ====="; // ---
-input int     InpBarsM1           = 4000;   // M1 history bars
-input int     InpBarsM3           = 3000;   // M3 history bars
-input int     InpBarsM5           = 3000;   // M5 history bars
-input int     InpBarsM15          = 2500;   // M15 history bars
-input int     InpBarsH1           = 1500;   // H1 history bars
-input int     InpBarsH4           = 1000;   // H4 history bars
+input string  GRPH           = "===== History Depth (bars per rung) ====="; // ---
+input int     InpBarsM1           = 4000;   // Rung1 history bars
+input int     InpBarsM3           = 3000;   // Rung2 history bars
+input int     InpBarsM5           = 3000;   // Rung3 (canonical) history bars
+input int     InpBarsM15          = 2500;   // Rung4 history bars
+input int     InpBarsH1           = 1500;   // Rung5 history bars
+input int     InpBarsH4           = 1000;   // Rung6 history bars
+
+//====================== INVISIBLE NETWORK INPUTS ==================
+input string  GRPN           = "===== Invisible Network ====="; // ---
+input bool    InpUseNetwork       = true;   // Compute the Invisible Network engine
+input double  InpNetWickFrac      = 0.30;   // FU spike: min wick / range
+input int     InpNetLookback      = 3;      // FU spike: structure lookback
+input int     InpNetAuthMin       = 45;     // Min node authority
+input int     InpNetNodeMax        = 250;   // Max remembered nodes
+input int     InpNetDormantBars   = 120;    // Bars until dormant
+input int     InpNetHistoryBars   = 600;    // Bars until historical
+input bool    InpNetBiasFilter    = false;  // Require netBias agreement for entries
+input bool    InpNetTarget        = false;  // Use network attractor as the take-profit magnet
+
+//====================== F72 CURVE-LIFE MANAGEMENT =================
+input string  GRPF           = "===== F72 Curve-Life Management ====="; // ---
+input bool    InpUseLifeMgmt      = true;   // Manage trades by curve-life (ALIVE/WEAKENING/DEAD)
+input bool    InpLifeDeadExit     = true;   // DEAD: close the position
+input bool    InpLifeFlip         = false;  // DEAD: also flip to the counter side
+input bool    InpLifeWeakTighten  = true;   // WEAKENING: tighten the stop
+input double  InpLifeTightenAtr   = 1.0;    // WEAKENING tighten distance (ATR)
+input bool    InpLifeAliveHold    = true;   // ALIVE: ignore engine exit (let it run)
 
 //====================== EXECUTION / RISK INPUTS ====================
 input string  GRPT           = "===== Trade Engine ====="; // ---
@@ -115,29 +142,48 @@ input double  InpMaxDrawdown      = 15.0;   // Max equity drawdown (%); 0 = off
 input bool    InpUseSession       = false;  // Restrict to trading session
 input int     InpSessionStart     = 7;      // Session start hour (server)
 input int     InpSessionEnd       = 21;     // Session end hour (server)
-input bool    InpOneTradePerBar   = true;   // Max one entry per M5 bar
+input bool    InpOneTradePerBar   = true;   // Max one entry per bar
 
 input string  GRPD           = "===== Diagnostics ====="; // ---
 input bool    InpVerbose          = true;   // Print decisions to log
 input bool    InpShowPanel        = true;   // On-chart status panel
 
 //====================== GLOBALS ====================================
-CLetra37Brain  g_brain;
-CLetra37Trade  g_trade;
-BrainParams    g_bp;
-RiskConfig     g_rc;
-datetime       g_lastBar = 0;
-string         g_panel   = "Letra37_Panel";
+CLetra37Brain   g_brain;
+CLetra37Network g_net;
+CLetra37Trade   g_trade;
+BrainParams     g_bp;
+NetParams       g_np;
+RiskConfig      g_rc;
+datetime        g_lastBar = 0;
+ENUM_TIMEFRAMES g_rung[6];
+bool            g_netReady = false;
 
 //+------------------------------------------------------------------+
-ENUM_TIMEFRAMES TF1(){ return(PERIOD_M15); }   // Timeframe 1 (HTF bias)
-ENUM_TIMEFRAMES TF2(){ return(PERIOD_H1);  }   // Timeframe 2 (HTF bias)
+//| Adaptive timeframe ladder (V60): six distinct rungs that climb   |
+//| from the chart timeframe so the multi-TF read stays honest on    |
+//| any chart. rung[2] is the canonical / execution rung (chart TF). |
+//+------------------------------------------------------------------+
+void ResolveLadder(ENUM_TIMEFRAMES &rung[],ENUM_TIMEFRAMES &tf1,ENUM_TIMEFRAMES &tf2)
+{
+   int csec=PeriodSeconds(Period());
+   ENUM_TIMEFRAMES chart=Period();
+   if(csec<3600)          { rung[0]=PERIOD_M1; rung[1]=PERIOD_M3; rung[2]=chart;     rung[3]=PERIOD_M15; rung[4]=PERIOD_H1;  rung[5]=PERIOD_H4; }
+   else if(csec<14400)    { rung[0]=PERIOD_H1; rung[1]=PERIOD_H2; rung[2]=chart;     rung[3]=PERIOD_H8;  rung[4]=PERIOD_H12; rung[5]=PERIOD_D1; }
+   else if(csec<86400)    { rung[0]=PERIOD_H4; rung[1]=PERIOD_H8; rung[2]=chart;     rung[3]=PERIOD_D1;  rung[4]=PERIOD_D1;  rung[5]=PERIOD_W1; }
+   else                   { rung[0]=PERIOD_D1; rung[1]=PERIOD_W1; rung[2]=chart;     rung[3]=PERIOD_W1;  rung[4]=PERIOD_MN1; rung[5]=PERIOD_MN1; }
+   tf1=rung[3];   // HTF belief engine 1 (M15-equivalent)
+   tf2=rung[4];   // HTF belief engine 2 (H1-equivalent)
+}
+
+string TFStr(const ENUM_TIMEFRAMES tf){ return(StringSubstr(EnumToString(tf),7)); }
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   if(Period()!=PERIOD_M5)
-      Print("Letra37: WARNING — engine is designed for the M5 execution timeframe. Attach to an M5 chart for intended behaviour.");
+   ENUM_TIMEFRAMES tf1,tf2;
+   ResolveLadder(g_rung,tf1,tf2);
+   for(int i=0;i<6;i++) g_bp.rung[i]=g_rung[i];
 
    //--- engine params
    g_bp.pivotLen=InpPivotLen; g_bp.atrLen=InpAtrLen; g_bp.effLen=InpEffLen; g_bp.resetBars=InpResetBars;
@@ -149,7 +195,7 @@ int OnInit()
    g_bp.requirePreConv=InpRequirePreConv; g_bp.requireInduction=InpRequireInduction;
    g_bp.liqRadius=InpLiqRadius; g_bp.liqAgDecay=InpLiqAgeDecay; g_bp.requireLiqSweep=InpRequireLiqSweep;
    g_bp.liqSweepLookback=InpLiqSweepLookback;
-   g_bp.tf1=TF1(); g_bp.tf2=TF2();
+   g_bp.tf1=tf1; g_bp.tf2=tf2;
    g_bp.baseLockBars=InpBaseLockBars; g_bp.requireHTFAlign=InpRequireHTFAlign; g_bp.execThreshold=InpExecThreshold;
    g_bp.beliefSmooth=InpBeliefSmooth; g_bp.confDecayRate=InpConfDecayRate;
    g_bp.erfReadyResW=InpErfResW; g_bp.erfReadyResidW=InpErfResidW; g_bp.erfReadyConfW=InpErfConfW;
@@ -157,6 +203,11 @@ int OnInit()
    g_bp.enableReturnPhase=InpEnableReturnPhase;
    g_bp.barsM1=InpBarsM1; g_bp.barsM3=InpBarsM3; g_bp.barsM5=InpBarsM5;
    g_bp.barsM15=InpBarsM15; g_bp.barsH1=InpBarsH1; g_bp.barsH4=InpBarsH4;
+
+   //--- network params
+   g_np.wickFrac=InpNetWickFrac; g_np.lookback=InpNetLookback; g_np.authMin=InpNetAuthMin;
+   g_np.nodeMax=InpNetNodeMax; g_np.dormantBars=InpNetDormantBars; g_np.historyBars=InpNetHistoryBars;
+   g_np.baseTF=g_rung[2]; g_np.baseBars=InpBarsM5;
 
    //--- risk config
    g_rc.magic=(ulong)InpMagic; g_rc.deviationPoints=InpDeviation;
@@ -172,17 +223,14 @@ int OnInit()
 
    g_trade.Init(_Symbol,g_rc);
 
-   Print("Letra37 EA initialised on ",_Symbol," | execution TF=M5 | HTF bias=M15/H1 | trading=",
-         (InpEnableTrading?"ON":"OFF"));
+   PrintFormat("Letra37 v2 on %s | ladder %s/%s/%s/%s/%s/%s | canon=%s | trading=%s",
+      _Symbol,TFStr(g_rung[0]),TFStr(g_rung[1]),TFStr(g_rung[2]),TFStr(g_rung[3]),
+      TFStr(g_rung[4]),TFStr(g_rung[5]),TFStr(g_rung[2]),(InpEnableTrading?"ON":"OFF"));
    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   ObjectDelete(0,g_panel);
-   Comment("");
-}
+void OnDeinit(const int reason){ Comment(""); }
 
 //+------------------------------------------------------------------+
 void OnTick()
@@ -191,10 +239,10 @@ void OnTick()
 
    //--- manage open position every tick (trailing / BE / exit) -----
    if(g_brain.ready && g_trade.HasPosition())
-      g_trade.ManagePosition(g_brain.atr>0?g_brain.atr:CurrentAtr(),g_brain.exitNow);
+      ManageOpen();
 
-   //--- only run the decision engine on a new CLOSED M5 bar --------
-   datetime bt=iTime(_Symbol,PERIOD_M5,0);
+   //--- only run the decision engine on a new CLOSED bar -----------
+   datetime bt=iTime(_Symbol,g_rung[2],0);
    if(bt==g_lastBar) return;
    g_lastBar=bt;
 
@@ -203,77 +251,131 @@ void OnTick()
       if(InpVerbose) Print("Letra37: not enough history yet — waiting.");
       return;
    }
+   g_netReady=(InpUseNetwork && g_net.Recompute(_Symbol,g_np));
 
    if(InpShowPanel) DrawPanel();
 
    if(InpVerbose)
-      PrintFormat("Letra37 | %s | dir=%d phase=%s grade=%s prob=%.0f%% edge=%.1f buy=%.0f sell=%.0f ERF=%.0f %s%s",
+      PrintFormat("Letra37 | %s | dir=%d phase=%s grade=%s prob=%.0f edge=%.1f life=%.0f(%s) net=%d %s%s",
                   TimeToString(g_brain.barTime),g_brain.outDir,g_brain.phase,g_brain.grade,
-                  g_brain.finalProb,g_brain.netEdgeAdjusted,g_brain.buyProb,g_brain.sellProb,
-                  g_brain.erfReadinessOut,
-                  (g_brain.longSignal?" >>> LONG SIGNAL":""),(g_brain.shortSignal?" >>> SHORT SIGNAL":""));
+                  g_brain.finalProb,g_brain.netEdgeAdjusted,g_brain.lifeScore,g_brain.aliveVerdict,
+                  (g_netReady?g_net.netBias:0),
+                  (g_brain.longSignal?" >>> LONG":""),(g_brain.shortSignal?" >>> SHORT":""));
 
    if(!InpEnableTrading) return;
-   if(g_trade.halted)
-   {
-      if(InpVerbose) Print("Letra37: trading halted — ",g_trade.haltReason);
-      return;
-   }
+   if(g_trade.halted){ if(InpVerbose) Print("Letra37: halted — ",g_trade.haltReason); return; }
 
    int posDir=g_trade.PositionDir();
 
-   //--- exit handling ---------------------------------------------
-   if(posDir!=0 && InpCloseOnExit && g_brain.exitNow)
+   //--- F72 DEAD: abandon the position (optionally flip) -----------
+   if(posDir!=0 && InpUseLifeMgmt && InpLifeDeadExit && g_brain.aliveVerdict=="DEAD")
+   {
+      g_trade.CloseAll();
+      posDir=0;
+      if(InpLifeFlip && g_brain.lifeTradeDir!=0)
+         OpenDir(g_brain.lifeTradeDir);
+   }
+
+   //--- engine exit (skipped while ALIVE if hold enabled) ----------
+   bool aliveHold=(InpUseLifeMgmt && InpLifeAliveHold && g_brain.aliveVerdict=="ALIVE");
+   if(posDir!=0 && InpCloseOnExit && g_brain.exitNow && !aliveHold)
    {
       g_trade.CloseAll();
       posDir=0;
    }
 
    //--- entry / reversal ------------------------------------------
-   if(g_brain.longSignal)
+   if(g_brain.longSignal && NetAgrees(1))
    {
       if(posDir==-1 && InpReverseOnSignal){ g_trade.CloseAll(); posDir=0; }
-      if(posDir==0)
-         g_trade.OpenTrade(1,g_brain.atr,g_brain.outFlipTop,g_brain.outFlipBot,
-                           g_brain.target,g_brain.invalidation,g_brain.attractorPrice);
+      if(posDir==0) OpenDir(1);
    }
-   else if(g_brain.shortSignal)
+   else if(g_brain.shortSignal && NetAgrees(-1))
    {
       if(posDir==1 && InpReverseOnSignal){ g_trade.CloseAll(); posDir=0; }
-      if(posDir==0)
-         g_trade.OpenTrade(-1,g_brain.atr,g_brain.outFlipTop,g_brain.outFlipBot,
-                           g_brain.target,g_brain.invalidation,g_brain.attractorPrice);
+      if(posDir==0) OpenDir(-1);
    }
+}
+
+//+------------------------------------------------------------------+
+//| Per-tick management: trailing/BE/exit + F72 WEAKENING tighten.   |
+//+------------------------------------------------------------------+
+void ManageOpen()
+{
+   double atr=(g_brain.atr>0?g_brain.atr:CurrentAtr());
+   bool aliveHold=(InpUseLifeMgmt && InpLifeAliveHold && g_brain.aliveVerdict=="ALIVE");
+   g_trade.ManagePosition(atr,g_brain.exitNow && !aliveHold);
+   if(InpUseLifeMgmt && InpLifeWeakTighten && g_brain.aliveVerdict=="WEAKENING")
+      g_trade.TightenStop(atr,InpLifeTightenAtr);
+}
+
+//+------------------------------------------------------------------+
+//| Network bias confluence (optional).                             |
+//+------------------------------------------------------------------+
+bool NetAgrees(const int dir)
+{
+   if(!InpUseNetwork || !InpNetBiasFilter || !g_netReady) return(true);
+   return(g_net.netBias==0 || g_net.netBias==dir);
+}
+
+//+------------------------------------------------------------------+
+//| Open a trade in dir, choosing the take-profit magnet.            |
+//+------------------------------------------------------------------+
+void OpenDir(const int dir)
+{
+   double tgt=g_brain.target;
+   if(InpNetTarget && g_netReady && g_net.attractorPrice!=DBL_MAX)
+   {
+      double a=g_net.attractorPrice;
+      if(dir==1 ? a>SymbolInfoDouble(_Symbol,SYMBOL_ASK) : a<SymbolInfoDouble(_Symbol,SYMBOL_BID))
+         tgt=a;
+   }
+   g_trade.OpenTrade(dir,g_brain.atr,g_brain.outFlipTop,g_brain.outFlipBot,
+                     tgt,g_brain.invalidation,g_brain.attractorPrice);
 }
 
 //+------------------------------------------------------------------+
 double CurrentAtr()
 {
    double buf[];
-   int hAtr=iATR(_Symbol,PERIOD_M5,InpAtrLen);
+   int hAtr=iATR(_Symbol,g_rung[2],InpAtrLen);
    if(hAtr==INVALID_HANDLE) return(0);
-   if(CopyBuffer(hAtr,0,1,1,buf)>0){ IndicatorRelease(hAtr); return(buf[0]); }
+   double v=0;
+   if(CopyBuffer(hAtr,0,1,1,buf)>0) v=buf[0];
    IndicatorRelease(hAtr);
-   return(0);
+   return(v);
 }
 
 //+------------------------------------------------------------------+
 void DrawPanel()
 {
    string s="";
-   s+="LETRA 37  —  "+_Symbol+"  (M5 engine)\n";
+   s+="LETRA 37 v2  —  "+_Symbol+"  ["+TFStr(g_rung[2])+" canon]\n";
    s+="Bar: "+TimeToString(g_brain.barTime)+"\n";
-   s+="Phase: "+g_brain.phase+"\n";
-   s+="Wave Dir: "+(g_brain.outDir==1?"BULLISH":g_brain.outDir==-1?"BEARISH":"NEUTRAL")+"\n";
-   s+="Directive: "+g_brain.directive+"\n";
-   s+="Grade: "+g_brain.grade+"   Prob: "+DoubleToString(g_brain.finalProb,0)+"%\n";
-   s+="Net Edge: "+DoubleToString(g_brain.netEdgeAdjusted,1)+"   (Buy "+DoubleToString(g_brain.buyProb,0)+
-      "% / Sell "+DoubleToString(g_brain.sellProb,0)+"%)\n";
-   s+="HTF Align: "+(g_brain.htfAlign==1?"BULL":g_brain.htfAlign==-1?"BEAR":"-")+
+   s+="Phase: "+g_brain.phase+"  (#"+IntegerToString(g_brain.phaseCode)+")\n";
+   s+="Wave Dir: "+(g_brain.outDir==1?"BULLISH":g_brain.outDir==-1?"BEARISH":"NEUTRAL")+
       "   Stack: "+(g_brain.fractalStackDir==1?"BULL":g_brain.fractalStackDir==-1?"BEAR":"-")+
       " ("+DoubleToString(g_brain.fractalCtxScore,0)+")\n";
-   s+="LiqHeat: "+DoubleToString(g_brain.liqHeatOut,0)+"   ERF Ready: "+DoubleToString(g_brain.erfReadinessOut,0)+"\n";
-   s+="DemandReturn Belief: "+DoubleToString(g_brain.demandReturnBeliefOut,0)+"\n";
+   s+="Directive: "+g_brain.directive+"   Grade: "+g_brain.grade+"  Prob "+DoubleToString(g_brain.finalProb,0)+"%\n";
+   s+="Net Edge: "+DoubleToString(g_brain.netEdgeAdjusted,1)+"  (Buy "+DoubleToString(g_brain.buyProb,0)+
+      "% / Sell "+DoubleToString(g_brain.sellProb,0)+"%)\n";
+   s+="Compression: "+DoubleToString(g_brain.compIdx,0)+"%   Recursion: "+IntegerToString(g_brain.recCount)+
+      "   Dominance: "+DoubleToString(g_brain.domTransfer,0)+"%\n";
+   s+="── F72 CURVE LIFE ──\n";
+   s+="Trade Alive?  "+g_brain.aliveVerdict+"   (life "+DoubleToString(g_brain.lifeScore,0)+")\n";
+   s+="Force: "+g_brain.cpState+"   Narrative: "+g_brain.narrState+"\n";
+   s+="Chain: "+g_brain.chainScope+"   HTF Threat: "+g_brain.htfThreat+"\n";
+   s+="Curve trade dir: "+(g_brain.lifeTradeDir==1?"LONG":g_brain.lifeTradeDir==-1?"SHORT":"wait")+"\n";
+   if(InpUseNetwork && g_netReady)
+   {
+      s+="── INVISIBLE NETWORK ──\n";
+      s+="netBias: "+(g_net.netBias==1?"BULL":g_net.netBias==-1?"BEAR":"-")+
+         "   Pressure: "+DoubleToString(g_net.pressure,0)+"  ("+IntegerToString(g_net.liveNodes)+" live)\n";
+      s+="Attractor: "+(g_net.attractorPrice==DBL_MAX?"-":DoubleToString(g_net.attractorPrice,_Digits))+"\n";
+      s+="FEZ: "+(g_net.fezLo==DBL_MAX?"-":DoubleToString(g_net.fezLo,_Digits))+" .. "+
+         (g_net.fezHi==DBL_MAX?"-":DoubleToString(g_net.fezHi,_Digits))+"\n";
+   }
+   s+="── EXECUTION ──\n";
    s+="Signal: "+(g_brain.longSignal?"LONG":g_brain.shortSignal?"SHORT":g_brain.exitNow?"EXIT":"—")+"\n";
    s+="Position: "+(g_trade.PositionDir()==1?"LONG":g_trade.PositionDir()==-1?"SHORT":"flat")+
       (g_trade.halted?("  [HALTED: "+g_trade.haltReason+"]"):"")+"\n";

@@ -1,70 +1,73 @@
-# Letra 37 — MT5 Autonomous Expert Advisor
+# Letra 37 — MT5 Autonomous Expert Advisor (V60 engine)
 
-A complete MQL5 port of the **Letra 37** Pine v6 indicator (`LETRA 37.txt`, 6208 lines),
-re-engineered from a chart-only intelligence dashboard into a fully **autonomous,
-risk-managed Expert Advisor**.
+A complete MQL5 port of the **Letra 37** Pine engine, upgraded with the **V60
+"F16 Raptor"** stack while keeping the **Letra decision layer** as the entry
+authority (no Senseei meta-layer).
 
-## What was ported
+## V60 upgrades in this build
+- **14-phase structure engine (`f_se`)** — the lifecycle now models how a move
+  actually dies and hands off: Expansion -> Pre-Convexity -> Induction ->
+  Liquidity -> New High/Low -> Transition -> Retracement -> HTF Flip Zone ->
+  Induction -> Liquidation -> Terminal Curve -> Demand/Supply Return. Driven by a
+  compression index, recursive-transition counting and dominance transfer. The
+  DIR-FIX spawn orders the order block by actual price and pins invalidation to
+  the protective extreme. This also makes the Demand/Supply Return entry phase
+  emit natively, so entries are reachable without any workaround.
+- **F72 "is the trade alive?" curve-life score** — scores the live trade
+  **ALIVE / WEAKENING / DEAD** from compression persistence (can the other side
+  even build a move here?), residual energy, retrace depth, progress and the HTF
+  parent threat, plus narrative lineage (are pullbacks getting shallower or
+  deeper?) and chain vitality. Used for trade management.
+- **Invisible Network node engine** — detects rejection-wick "FU" levels across
+  MN -> M5, scores each by authority (timeframe weight + revisits + strength), and
+  produces `netBias`, `pressure`, the **primary attractor** (the magnet price is
+  pulled toward) and the **FEZ corridor**.
+- **Adaptive timeframe ladder** — six distinct rungs that climb from the chart
+  timeframe instead of collapsing to the chart above H1 (fixes the pinned
+  fractal-score bug); the multi-timeframe read stays honest on any chart.
 
-The Pine script is a multi-timeframe Smart-Money / "wave physics" engine. The
-trading-relevant logic was reimplemented faithfully (visual/dashboard code was not
-needed for an EA):
+## How the pieces are wired
+- The **Letra decision layer** (physics, beliefs, scoring, Bayesian probability,
+  edge/slippage, execution lock, belief entries, ERF gate) remains the entry
+  trigger, now fed by the 14-phase engine.
+- **F72 curve-life** manages open trades: `DEAD` closes (optionally flips),
+  `WEAKENING` tightens the stop, `ALIVE` can hold through a premature engine exit.
+- The **Network** is optional confluence: `netBias` can gate entries and the
+  attractor can be used as the take-profit magnet (both off by default to keep the
+  Letra layer precise).
 
-| Pine section | MQL5 location |
+| Component | File |
 |---|---|
-| `f_se()` fixed-TF structure engine (dir / phase / swings / BOS / CHoCH / point-4 / invalidation / target / FRZ) | `Include/Letra37/Letra37_Structure.mqh` |
-| `f_phys()` core physics (velocity / acceleration / convexity / efficiency / displacement / impulse / decay) | `Include/Letra37/Letra37_Brain.mqh` |
-| `f_htfBeliefs()` HTF belief engine (tf1 / tf2) | `Include/Letra37/Letra37_HTFBelief.mqh` |
-| Sections 3–24: market structure, wave spawn, Engine 1A lifecycle, ERF (Energy Resolution Framework), beliefs, scoring, Bayesian probability, slippage/edge, execution lock, entry & exit signals | `Include/Letra37/Letra37_Brain.mqh` |
-| `ta.atr/ema/sma/pivothigh/pivotlow/sum/highest/lowest` | `Include/Letra37/Letra37_Series.mqh` |
-| Order execution, risk-% sizing, ATR/structural stops, break-even, trailing, daily-loss & drawdown halts, spread/session filters | `Include/Letra37/Letra37_Trade.mqh` |
+| 14-phase structure engine (`f_se`) | `Include/Letra37/Letra37_Structure.mqh` |
+| Streaming TA helpers | `Include/Letra37/Letra37_Series.mqh` |
+| HTF belief engine | `Include/Letra37/Letra37_HTFBelief.mqh` |
+| Decision layer + F72 curve-life | `Include/Letra37/Letra37_Brain.mqh` |
+| Invisible Network node engine | `Include/Letra37/Letra37_Network.mqh` |
+| Execution & risk manager | `Include/Letra37/Letra37_Trade.mqh` |
 | EA orchestration, inputs, panel | `Experts/Letra37/Letra37_EA.mq5` |
 
-### Architecture
-- **Execution timeframe:** M5 (mirrors the source's fixed L0 = M5 engine).
-- **Context engines:** six independent fixed-TF structure engines (M1, M3, M5, M15, H1, H4)
-  plus two HTF belief engines (M15, H1), exactly as the Pine `request.security` calls.
-- The decision engine evaluates on each **closed** M5 bar (the still-forming bar is dropped),
-  reproducing Pine's confirm-on-close behaviour, then the risk layer manages positions on every tick.
-- Each new bar triggers a deterministic full recompute over a rolling window, so there is
-  no hidden state drift between runs.
-
 ## Install
-1. Copy `MT5/Include/Letra37/` → `<MetaTrader>/MQL5/Include/Letra37/`
-2. Copy `MT5/Experts/Letra37/` → `<MetaTrader>/MQL5/Experts/Letra37/`
-3. Open `Letra37_EA.mq5` in MetaEditor and compile (F7).
-4. Attach the EA to an **M5** chart of the instrument you want to trade.
+1. Copy `MT5/Include/Letra37/` -> `<MetaTrader>/MQL5/Include/Letra37/`
+2. Copy `MT5/Experts/Letra37/` -> `<MetaTrader>/MQL5/Experts/Letra37/`
+3. Compile `Letra37_EA.mq5` in MetaEditor (F7).
+4. Attach to a chart (designed for M5; the adaptive ladder keeps it valid on any TF).
 
-## Important note on entries (deliberate, documented deviation)
-In the original Pine, `longSignal`/`shortSignal` gate on
-`ie1a_currentPhase == "Demand Return" / "Supply Return"`. However the M5 phase state
-machine in `f_se()` can only emit phases up to *Retracement Induction* — it **never
-produces** the "Demand/Supply Return" phase. As written, the source's entry signals are
-therefore effectively unreachable (it behaves as a visualization/dashboard tool).
+## Decision flow
+- Execution / canonical timeframe = the chart timeframe (rung 3 of the ladder).
+- Six structure engines run on the six ladder rungs; two HTF belief engines run on
+  the M15/H1-equivalent rungs.
+- The engine evaluates on each **closed** bar (the still-forming bar is dropped),
+  reproducing Pine confirm-on-close; the risk layer manages positions every tick.
 
-To make the EA actually trade, a **canonical terminal Return-phase detector** was added at
-decision time: when a directional wave is in its retracement/absorption family and price
-returns *into the flip (demand/supply) zone* with the Demand-Return belief dominant
-(`demandReturnBelief > 50` and ≥ retracement belief), the phase is promoted to
-"Demand/Supply Return". This matches the lifecycle the source documents
-(`Retracement → ... → Demand/Supply Return`) and uses only existing engine variables.
-It is controlled by the input **`InpEnableReturnPhase`** (default `true`). Set it `false`
-to reproduce the literal (non-trading) source behaviour. All other quality gates
-(HTF alignment, grade, Bayesian edge, ERF readiness, liquidity sweep, OB freshness,
-induction/pre-convexity, structure confirm, execution lock) are preserved unchanged.
-
-## Risk controls (institutional layer)
-- Risk-% per trade position sizing (or fixed lot), with a max-lot cap.
-- SL from ATR and/or structural invalidation (flip zone) with a configurable buffer; the
-  safer of the two is used. TP from the wave target or a minimum reward:risk floor.
-- Break-even move, ATR trailing stop, close-on-engine-exit.
-- Daily-loss limit and equity max-drawdown halts, spread filter, optional trading session,
-  one-entry-per-bar, broker stop-level normalization, magic-number isolation.
+## Risk controls
+Risk-% sizing (or fixed lot), ATR + structural stops with a min reward:risk floor,
+break-even, ATR trailing, F72 curve-life management, daily-loss & equity-drawdown
+halts, spread filter, optional session window, one-entry-per-bar and broker
+stop-level normalization.
 
 ## Backtesting note
-Each new bar performs a full multi-timeframe recompute (correctness over speed). This is
-trivial live (once per 5 minutes) but can be slow in the Strategy Tester over long ranges.
-For tester runs, reduce the `History Depth` inputs (e.g. M1=1500, M5=1500) to speed things up.
+Each new bar performs a full multi-timeframe recompute (correctness over speed) —
+trivial live, but reduce the History Depth inputs for long Strategy Tester runs.
 
-> Educational/research software. Test thoroughly on a demo account before any live use.
-> No warranty; trading involves substantial risk.
+> Educational/research software. Test thoroughly on a demo account before any live
+> use. No warranty; trading involves substantial risk.

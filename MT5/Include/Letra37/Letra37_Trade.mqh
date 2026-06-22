@@ -313,6 +313,21 @@ public:
       if(m_pos.Select(m_symbol) && m_pos.Magic()==m_cfg.magic)
          m_trade.PositionClose(m_symbol);
    }
+
+   //--- tighten the stop toward price (F72 "WEAKENING -> manage") ---
+   void TightenStop(const double atr,const double atrMult)
+   {
+      if(!m_pos.Select(m_symbol)) return;
+      if(m_pos.Magic()!=m_cfg.magic) return;
+      int dir=(m_pos.PositionType()==POSITION_TYPE_BUY?1:-1);
+      double price=(dir==1?SymbolInfoDouble(m_symbol,SYMBOL_BID):SymbolInfoDouble(m_symbol,SYMBOL_ASK));
+      double curSL=m_pos.StopLoss(), curTP=m_pos.TakeProfit();
+      double newSL=(dir==1?price-atr*atrMult:price+atr*atrMult);
+      double stopLevel=(double)SymbolInfoInteger(m_symbol,SYMBOL_TRADE_STOPS_LEVEL)*m_point;
+      bool valid=(dir==1?(price-newSL>=stopLevel && (curSL==0||newSL>curSL))
+                        :(newSL-price>=stopLevel && (curSL==0||newSL<curSL)));
+      if(valid) m_trade.PositionModify(m_symbol,NormalizePrice(newSL),curTP);
+   }
 };
 //+------------------------------------------------------------------+
 
