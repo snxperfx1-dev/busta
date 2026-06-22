@@ -129,10 +129,10 @@ input bool   InpFURequireBias   = true;    // FU: only take a node that AGREES w
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
-input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
+input bool   InpUseCurveLifeExit= false;   // Exit when v60 curve-life goes DEAD (OFF - life score dips mid-run and cut winners)
 input double InpCurveDeadBelow  = 32.0;    // life <= this => DEAD (close)
 input bool   InpUseMigrationTrail= false;  // Keep stop at ownership-migration 0.618 band while force persists
-input bool   InpUseNarrativeMgmt= true;    // Manage with narrative lineage / chain vitality
+input bool   InpUseNarrativeMgmt= false;   // Manage with narrative lineage / chain vitality (OFF - same decay-close problem)
 input double InpChainExitBelow  = 25.0;    // Exit when chain vitality <= this (story decayed across curves)
 
 //==================================================================
