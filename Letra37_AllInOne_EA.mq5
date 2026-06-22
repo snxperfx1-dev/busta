@@ -2991,6 +2991,7 @@ input bool   InpAggressiveEntry = false;   // AGGRESSIVE: also enter on v60 conf
 input bool   InpAggReqNet       = true;    // Aggressive: require network bias to agree
 input bool   InpAggReqTime      = false;   // Aggressive: respect TIE-opposed block
 input bool   InpFUExtremeEntry  = true;    // Enter AT the fresh FU node (the indicator's extreme) - stop beyond the wick tip
+input bool   InpFURequireBias   = true;    // FU: only take a node that AGREES with the dominant bias (DOE+network+wave) - stops fading reversals
 
 input group "Letra37 EA - v60 Curve-Life Management"
 input bool   InpUseCurveLifeExit= true;    // Exit when v60 curve-life goes DEAD (in trade direction)
@@ -3234,6 +3235,22 @@ int DesiredDirection()
    return(0);
 }
 
+//--- dominant directional consensus: DOE bias is the authority (weight 2),
+//--- the Invisible-Network bias and the wave direction confirm. Used to stop
+//--- the FU extreme entry from fading a developing reversal (e.g. selling into
+//--- an old supply node while the structure is turning bullish). 0 = no clear bias.
+int ConsensusBias()
+{
+   int v=0;
+   if(cur_doeAction=="Long")  v+=2; else if(cur_doeAction=="Short") v-=2;   // DOE = decision authority
+   if(StringFind(cur_doeBias,"Bull")>=0) v+=1; else if(StringFind(cur_doeBias,"Bear")>=0) v-=1;
+   v += ctx_netBias;        // Invisible Network bias (-1/0/+1)
+   v += ctx_waveDir;        // canonical wave direction (-1/0/+1)
+   if(v>0) return(1);
+   if(v<0) return(-1);
+   return(0);
+}
+
 bool PassesFilters(const int dir)
 {
    if(dir==1 && !InpTradeLongs){ gEntryBlock="longs off"; return(false); }
@@ -3338,7 +3355,12 @@ void TryEnter()
    bool aggressive=false, fuEntry=false;
    //--- PRIORITY: enter AT the fresh FU node (the indicator's extreme) ---
    if(dir==0 && InpUseV60Context && InpFUExtremeEntry && ctx_fuFresh && ctx_fuDir!=0){
-      dir=ctx_fuDir; aggressive=true; fuEntry=true;
+      int cb=ConsensusBias();
+      if(InpFURequireBias && cb!=0 && ctx_fuDir!=cb){
+         gEntryBlock="FU "+(ctx_fuDir==1?"buy":"sell")+" node opposes "+(cb==1?"bull":"bear")+" bias";
+      } else {
+         dir=ctx_fuDir; aggressive=true; fuEntry=true;
+      }
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
    if(dir==0 && InpUseV60Context && InpAggressiveEntry){
