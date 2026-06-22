@@ -333,13 +333,17 @@ int DesiredDirection()
 {
    bool engLong=cur_longSignal, engShort=cur_shortSignal;
    bool v72Long =(cur_doeAction=="Long"),  v72Short=(cur_doeAction=="Short");
-   bool wantLong=false, wantShort=false;
-   if(InpSignalSource==SIG_ENGINE){ wantLong=engLong; wantShort=engShort; }
-   else if(InpSignalSource==SIG_V72){ wantLong=v72Long; wantShort=v72Short; }
-   else if(InpSignalSource==SIG_EITHER){ wantLong=engLong||v72Long; wantShort=engShort||v72Short; }
-   else { wantLong=engLong&&v72Long; wantShort=engShort&&v72Short; }   // SIG_BOTH (strict)
-   if(wantLong && !wantShort) return(1);    // conflict (both true) -> 0 = no trade
-   if(wantShort && !wantLong) return(-1);
+   if(InpSignalSource==SIG_ENGINE) return(engLong?1:engShort?-1:0);
+   if(InpSignalSource==SIG_V72)    return(v72Long?1:v72Short?-1:0);
+   if(InpSignalSource==SIG_BOTH){ if(engLong&&v72Long) return(1); if(engShort&&v72Short) return(-1); return(0); }
+   // SIG_EITHER: the arrow is the faster, precise trigger -> it LEADS; the DOE is the
+   // continuously-updating next-entry bias and fills in when no arrow fired.
+   // No conflict suppression: a fresh opposite arrow simply flips the trade
+   // (handled in TryEnter via exit-on-opposite / reverse).
+   if(engLong)  return(1);
+   if(engShort) return(-1);
+   if(v72Long)  return(1);
+   if(v72Short) return(-1);
    return(0);
 }
 
