@@ -3104,6 +3104,7 @@ input bool          InpUseKeyLevelStop  = true;         // Anchor SL beyond the 
 input int           InpSwingLookback    = 20;           // Bars scanned for the protective key swing high/low
 input double        InpKeyLevelBufATR   = 0.80;         // Buffer beyond the key high/low (xATR) - gold wicks are large
 input double        InpMaxSLAtr         = 10.0;         // Safety cap on total SL distance (xATR)
+input bool          InpCompSizing       = true;         // Recursion-size-aware sizing: compression sets stop distance + partial timing (wide loop=wider stop, failure-swing=tighter)
 
 input group "Letra37 EA - Take Profit"
 input ENUM_TP_MODE  InpTPMode           = TP_NETWORK;   // Take-profit source (FU / Invisible-Network attractor)
@@ -3193,6 +3194,7 @@ double   gDayStartEquity= 0.0;
 int      gTradesToday   = 0;
 bool     gHalted        = false;
 string   gEntryBlock    = "-";   // live reason the EA is NOT entering (shown in panel)
+double   gRecSizeMult   = 1.0;   // recursion-size-aware stop multiplier (set per entry from compression)
 
 //--- chart-TF rates for the engine ---
 datetime eaT[]; double eaO[],eaH[],eaL[],eaC[],eaVol[];
@@ -3462,6 +3464,22 @@ bool PassesFilters(const int dir)
    return(true);
 }
 
+//--- recursion-size-aware multipliers (Part 4a): compression sets loop size, so a
+//--- failure-swing/compressed terminal gets a TIGHTER stop + earlier partial, while a
+//--- wide low-compression curve gets a WIDER stop + full target. Geometry, not guesswork.
+double RecSizeMult()
+{
+   if(!InpCompSizing || !InpUseV60Context) return(1.0);
+   string r=cur_compRegime;
+   return( r=="Extreme"?0.65 : r=="High"?0.80 : r=="Medium"?1.0 : 1.25 );  // Low compression = wide loops
+}
+double PartialFrac()
+{
+   if(!InpCompSizing || !InpUseV60Context) return(1.0);
+   string r=cur_compRegime;
+   return( r=="Extreme"?0.40 : r=="High"?0.55 : r=="Medium"?0.75 : 1.0 );  // compressed = bank partial sooner
+}
+
 //--- protective stop just beyond the recent KEY swing high/low (real structure).
 //--- long  -> below the lowest low of the last InpSwingLookback closed bars
 //--- short -> above the highest high of the last InpSwingLookback closed bars
@@ -3471,7 +3489,7 @@ double KeyLevelStop(const int dir,const double entry)
    if(!InpUseKeyLevelStop) return(0.0);
    double atr=cur_atr; if(atr<=0) atr=10*_Point;
    int lb=InpSwingLookback; if(lb<2) lb=2;
-   double buf=InpKeyLevelBufATR*atr;
+   double buf=InpKeyLevelBufATR*atr*gRecSizeMult;
    double s=0.0;
    if(dir==1){
       int idx=iLowest(_Symbol,_Period,MODE_LOW,lb,1);     // 1 = skip the still-forming bar
@@ -3505,7 +3523,7 @@ double ComputeSL(const int dir,const double entry)
       else        sl=MathMax(sl,ks);   // short: take the higher (more protective) stop
    }
    //--- enforce correct side + minimum stop distance (broker min AND >= InpMinSLAtr*ATR) ---
-   double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*atr);
+   double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*gRecSizeMult*atr);
    if(dir==1  && sl>entry-minD) sl=entry-minD;
    if(dir==-1 && sl<entry+minD) sl=entry+minD;
    //--- safety cap so a runaway swing can't create an absurd stop ---
@@ -3608,17 +3626,18 @@ void TryEnter()
    sym.RefreshRates();
    double ask=sym.Ask(), bid=sym.Bid();
    double entry=(dir==1?ask:bid);
+   gRecSizeMult=RecSizeMult();          // recursion-size-aware stop sizing (compression -> loop size)
    double slBase;
    if(fuEntry && !naf(ctx_fuTip)){
       double a=cur_atr; if(a<=0) a=10*_Point;
-      slBase=(dir==1? ctx_fuTip - InpMinSLAtr*a : ctx_fuTip + InpMinSLAtr*a);   // stop BEYOND the FU wick extreme
+      slBase=(dir==1? ctx_fuTip - InpMinSLAtr*gRecSizeMult*a : ctx_fuTip + InpMinSLAtr*gRecSizeMult*a);   // stop BEYOND the FU wick extreme
       //--- and push it beyond the recent key swing high/low (whichever protects more) ---
       double ks=KeyLevelStop(dir,entry);
       if(ks!=0.0){
          if(dir==1)  slBase=MathMin(slBase,ks);
          else        slBase=MathMax(slBase,ks);
       }
-      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*a);
+      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*gRecSizeMult*a);
       if(dir==1 && slBase>entry-minD) slBase=entry-minD;
       if(dir==-1&& slBase<entry+minD) slBase=entry+minD;
       double maxD=InpMaxSLAtr*a;                                                // safety cap
@@ -3632,7 +3651,7 @@ void TryEnter()
       double s2=cur_mtfEntryInv + (dir==1? -InpSLEngineBufATR*a : InpSLEngineBufATR*a);
       double ks=KeyLevelStop(dir,entry);
       if(ks!=0.0){ if(dir==1) s2=MathMin(s2,ks); else s2=MathMax(s2,ks); }
-      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*a);
+      double minD=MathMax(MinStopDist()+_Point, InpMinSLAtr*gRecSizeMult*a);
       if(dir==1 && s2>entry-minD) s2=entry-minD;
       if(dir==-1&& s2<entry+minD) s2=entry+minD;
       double maxD=InpMaxSLAtr*a;
@@ -3674,7 +3693,10 @@ void TryEnter()
          if(pt==0) continue;
          if(PositionGetInteger(POSITION_MAGIC)==(long)InpMagic && PositionGetString(POSITION_SYMBOL)==_Symbol){
             double psl=PositionGetDouble(POSITION_SL);
+            double _openP=PositionGetDouble(POSITION_PRICE_OPEN);
             double _tp1net=!naf(ctx_netTarget)?ctx_netTarget:ctx_attractorPx;   // FU/Network target for partial
+            //--- recursion-size-aware partial: bank sooner when compressed (move is quick) ---
+            if(!naf(_tp1net)){ double pf=PartialFrac(); _tp1net=_openP+(_tp1net-_openP)*pf; }
             MgRegister(pt,psl,_tp1net,dir);
             break;
          }
