@@ -26,7 +26,7 @@
 //==================================================================
 // EA INPUT ENUMS
 //==================================================================
-enum ENUM_SIG_SOURCE { SIG_ENGINE, SIG_V72, SIG_BOTH };   // which decision drives entries
+enum ENUM_SIG_SOURCE { SIG_ENGINE, SIG_V72, SIG_EITHER, SIG_BOTH };   // arrows / DOE / either(OR) / both(AND)
 enum ENUM_LOT_MODE   { LOT_FIXED, LOT_RISK_PCT };
 enum ENUM_SL_MODE    { SL_ENGINE, SL_ATR, SL_FIXED };
 enum ENUM_TP_MODE    { TP_ENGINE_TP1, TP_ENGINE_TP2, TP_RR, TP_ATR };
@@ -37,7 +37,7 @@ enum ENUM_MIN_GRADE  { G_APLUS, G_A, G_B, G_C, G_D };
 // EA INPUTS
 //==================================================================
 input group "Letra37 EA - Execution"
-input ENUM_SIG_SOURCE InpSignalSource   = SIG_V72;      // Decision authority: V72=DOE/Command panel (recommended), ENGINE=raw arrows, BOTH=require both
+input ENUM_SIG_SOURCE InpSignalSource   = SIG_EITHER;   // Entry source: EITHER=arrow OR DOE (both types), V72=DOE only, ENGINE=arrows only, BOTH=require both
 input bool   InpTradeLongs              = true;         // Allow long trades
 input bool   InpTradeShorts             = true;         // Allow short trades
 input bool   InpReverseOnOpposite       = false;        // Reverse position on opposite signal
@@ -53,7 +53,7 @@ input bool          InpUseTqeFilter     = true;         // Require V72 TQE grade
 input ENUM_MIN_GRADE InpMinTqeGrade     = G_B;          // Min TQE grade
 input bool          InpRequireErfGate   = true;         // Require ERF entry gate open
 input bool          InpRequireHtfAlign  = false;        // Require HTF alignment with trade dir
-input bool          InpRequireDoeAction = true;         // Require V72 DOE action = Long/Short (SIG_V72/BOTH)
+input bool          InpRequireDoeAction = true;         // (deprecated; entry source enum now controls this)
 input double        InpMinConfidence    = 0.0;          // Min DOE confidence % (0=off)
 
 input group "Letra37 EA - Risk / Sizing"
@@ -336,9 +336,9 @@ int DesiredDirection()
    bool wantLong=false, wantShort=false;
    if(InpSignalSource==SIG_ENGINE){ wantLong=engLong; wantShort=engShort; }
    else if(InpSignalSource==SIG_V72){ wantLong=v72Long; wantShort=v72Short; }
-   else { wantLong=engLong||v72Long; wantShort=engShort||v72Short; }
-   if(InpRequireDoeAction && InpSignalSource!=SIG_ENGINE){ wantLong=wantLong&&v72Long; wantShort=wantShort&&v72Short; }
-   if(wantLong && !wantShort) return(1);
+   else if(InpSignalSource==SIG_EITHER){ wantLong=engLong||v72Long; wantShort=engShort||v72Short; }
+   else { wantLong=engLong&&v72Long; wantShort=engShort&&v72Short; }   // SIG_BOTH (strict)
+   if(wantLong && !wantShort) return(1);    // conflict (both true) -> 0 = no trade
    if(wantShort && !wantLong) return(-1);
    return(0);
 }
@@ -426,7 +426,10 @@ void TryEnter()
    double slBase=ComputeSL(dir,entry);
    double lot=CalcLot(entry,slBase);
    double tp=ComputeTP(dir,entry,slBase);
-   string cmt=InpComment+" "+cur_tqeGrade+" "+cur_doeAction;
+   bool _arrow=(dir==1?cur_longSignal:cur_shortSignal);
+   bool _doe=(dir==1?(cur_doeAction=="Long"):(cur_doeAction=="Short"));
+   string _trig=(_arrow&&_doe)?"ARROW+DOE":_arrow?"ARROW":"DOE";
+   string cmt=InpComment+" "+_trig+" "+cur_tqeGrade;
 
    bool ok=false;
    if(InpUseLimitEntry && !naf(cur_doeEntryMid)){
