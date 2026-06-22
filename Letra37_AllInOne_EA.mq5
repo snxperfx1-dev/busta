@@ -2742,6 +2742,11 @@ double ctx_life=50.0, ctx_cpForce=0; string ctx_cpState="NEUTRAL", ctx_alive="WE
 //--- narrative lineage / ownership migration (context) ---
 double ctx_narrative=50.0; string ctx_narrState="HOLDING"; bool ctx_converging=false;
 double ctx_chainVitality=50.0, ctx_mig50=NA, ctx_mig618=NA, ctx_retrX=50.0;
+//--- F72 campaign ownership: building (expansion -> flip) vs terminal (at the HTF FU flip zone) ---
+bool   ctx_atFlip=false;          // price has reached / is inside the HTF FU flip zone
+string ctx_campaign="EXPANSION";  // EXPANSION (building) / TERMINAL (at flip)
+double ctx_distFlipAtr=0.0;       // distance to the flip magnet in ATR
+bool   ctx_fuMerged=false;        // recursive curve respected the parent FU -> camp merged back (Principle 9)
 //--- TIE detail ---
 string ctx_h1Timing="—"; double ctx_wp=0, ctx_atr=0;
 
@@ -2983,6 +2988,21 @@ void ContextRun(const int bars)
       }
    }
 
+   //--- F72 CAMPAIGN OWNERSHIP -------------------------------------------------
+   //  Building (EXPANSION) = trending toward the HTF flip; TERMINAL = price has
+   //  reached the FU flip zone, where induction/liquidation/entry-cycle happens.
+   //  The FU flip zone is already mapped (network attractor / FEZ corridor).
+   double _flipMag = !naf(attractorPx)?attractorPx : nz(netTarget,c_tgt);
+   bool   _inFez   = (!naf(fezHi)&&!naf(fezLo)&&clL<=fezHi&&clL>=fezLo);
+   double _distMag = (!naf(_flipMag))?MathAbs(clL-_flipMag):NA;
+   ctx_distFlipAtr = (!naf(_distMag)&&atrL>0)?_distMag/atrL : 5.0;
+   ctx_atFlip   = _inFez || (!naf(_distMag) && _distMag<=atrL*1.0);
+   ctx_campaign = ctx_atFlip ? "TERMINAL (at flip)" : "EXPANSION (building)";
+   //  Principle 9 — FU camp merge: a fresh FU node that sits at the SAME flip zone as
+   //  the network attractor means the recursive curve respected the parent FU, so the
+   //  campaign merged back into the parent (not a genuinely new camp).
+   ctx_fuMerged = (ctx_fuFresh && !naf(ctx_fuTip) && !naf(_flipMag) && atrL>0 && MathAbs(ctx_fuTip-_flipMag)<=atrL*0.75);
+
    //--- publish FEATURE outputs only (NO Senseei decision layer) ---
    ctx_fuFresh=fuFresh; ctx_fuDir=fuDir; ctx_fuTip=fuTip; ctx_fuMid=fuMid;
    ctx_waveDir=waveDir; ctx_stackDir=stackDir; ctx_netBias=netBias; ctx_pdir=pdir; ctx_timeDir=timeDir;
@@ -3106,6 +3126,7 @@ input bool   InpMultiTFEntry    = true;    // MULTI-TF: enter on a fresh Demand/
 input int    InpMinEntryRung     = 1;      // Lowest rung allowed for a multi-TF entry (1=M1 ... 6=H4)
 input double InpMinDomTransfer   = 45.0;   // Min dominance-transfer % to treat a Return as an ENTRY CYCLE (below = first strike, wait)
 input double InpMinEntryProb     = 0.0;    // Optional: min entry-cycle probability % to allow a multi-TF entry (0 = off)
+input bool   InpRequireAtFlip    = false;  // Optional: only take multi-TF entries when price is AT the HTF FU flip zone (terminal side)
 input bool   InpBlockCounterBias = true;   // VETO any entry (incl. arrows/DOE) opposing the dominant thesis (narrative+DOE+network+wave+stack)
 
 input group "Letra37 EA - v60 Curve-Life Management"
@@ -3490,8 +3511,9 @@ void TryEnter()
    //  Only a genuine ENTRY CYCLE (dominance transferred to the recursive wave) qualifies;
    //  a first strike (low dominance) is skipped — the curve is still building.
    if(dir==0 && InpMultiTFEntry && cur_mtfEntryFresh && cur_mtfEntryDir!=0 && cur_mtfEntryWt>=InpMinEntryRung){
-      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
+      if(cur_mtfEntryDom>=InpMinDomTransfer && cur_entryProb>=InpMinEntryProb && (!InpRequireAtFlip || !InpUseV60Context || ctx_atFlip)){ dir=cur_mtfEntryDir; aggressive=true; mtfEntry=true; }
       else if(cur_mtfEntryDom<InpMinDomTransfer) gEntryBlock="first strike "+cur_mtfEntryTF+" (dom "+IntegerToString((int)cur_mtfEntryDom)+"% < entry cycle)";
+      else if(InpRequireAtFlip && InpUseV60Context && !ctx_atFlip) gEntryBlock="not at flip zone ("+DoubleToString(ctx_distFlipAtr,1)+"ATR away)";
       else gEntryBlock="entry prob low "+IntegerToString((int)cur_entryProb)+"%";
    }
    //--- aggressive v60-confluence entry when strict Letra has no signal ---
@@ -3726,6 +3748,7 @@ void ShowStatus()
    s+="Curve  : own "+cur_curveOwner+" "+f_waveDirLabel(cur_ownerDir)+"  "+cur_transState+"  ["+cur_entryReady+"]\n";
    s+="Recur  : dom "+R0(cur_domTransfer)+"%  comp "+cur_compRegime+"  depth "+IntegerToString(cur_recDepth)+"/"+IntegerToString(cur_expRecDepth)+(cur_mtfEntryFresh?("  | RET "+cur_mtfEntryTF+" "+(cur_mtfEntryDir==1?"L":"S")+" dom "+R0(cur_mtfEntryDom)+"%"):"")+"\n";
    s+="Cap    : budget "+R0(cur_curveBudget)+"%  toFlip "+DoubleToString(cur_distFlipAtr,1)+"ATR  entryP "+R0(cur_entryProb)+"%\n";
+   if(InpUseV60Context) s+="Camp   : "+ctx_campaign+"  toFlip "+DoubleToString(ctx_distFlipAtr,1)+"ATR"+(ctx_fuMerged?"  [FU merged->parent]":"")+"\n";
    s+="Narr   : "+cur_cmdNarrative;
    if(InpUseV60Context){
       s+="\n--- v60 context ---";

@@ -250,6 +250,11 @@ double ctx_life=50.0, ctx_cpForce=0; string ctx_cpState="NEUTRAL", ctx_alive="WE
 //--- narrative lineage / ownership migration (context) ---
 double ctx_narrative=50.0; string ctx_narrState="HOLDING"; bool ctx_converging=false;
 double ctx_chainVitality=50.0, ctx_mig50=NA, ctx_mig618=NA, ctx_retrX=50.0;
+//--- F72 campaign ownership: building (expansion -> flip) vs terminal (at the HTF FU flip zone) ---
+bool   ctx_atFlip=false;          // price has reached / is inside the HTF FU flip zone
+string ctx_campaign="EXPANSION";  // EXPANSION (building) / TERMINAL (at flip)
+double ctx_distFlipAtr=0.0;       // distance to the flip magnet in ATR
+bool   ctx_fuMerged=false;        // recursive curve respected the parent FU -> camp merged back (Principle 9)
 //--- TIE detail ---
 string ctx_h1Timing="—"; double ctx_wp=0, ctx_atr=0;
 
@@ -490,6 +495,21 @@ void ContextRun(const int bars)
          fuAuth=a; fuFresh=true; fuDir=nd; fuTip=np; fuMid=sn_mid[fi];
       }
    }
+
+   //--- F72 CAMPAIGN OWNERSHIP -------------------------------------------------
+   //  Building (EXPANSION) = trending toward the HTF flip; TERMINAL = price has
+   //  reached the FU flip zone, where induction/liquidation/entry-cycle happens.
+   //  The FU flip zone is already mapped (network attractor / FEZ corridor).
+   double _flipMag = !naf(attractorPx)?attractorPx : nz(netTarget,c_tgt);
+   bool   _inFez   = (!naf(fezHi)&&!naf(fezLo)&&clL<=fezHi&&clL>=fezLo);
+   double _distMag = (!naf(_flipMag))?MathAbs(clL-_flipMag):NA;
+   ctx_distFlipAtr = (!naf(_distMag)&&atrL>0)?_distMag/atrL : 5.0;
+   ctx_atFlip   = _inFez || (!naf(_distMag) && _distMag<=atrL*1.0);
+   ctx_campaign = ctx_atFlip ? "TERMINAL (at flip)" : "EXPANSION (building)";
+   //  Principle 9 — FU camp merge: a fresh FU node that sits at the SAME flip zone as
+   //  the network attractor means the recursive curve respected the parent FU, so the
+   //  campaign merged back into the parent (not a genuinely new camp).
+   ctx_fuMerged = (ctx_fuFresh && !naf(ctx_fuTip) && !naf(_flipMag) && atrL>0 && MathAbs(ctx_fuTip-_flipMag)<=atrL*0.75);
 
    //--- publish FEATURE outputs only (NO Senseei decision layer) ---
    ctx_fuFresh=fuFresh; ctx_fuDir=fuDir; ctx_fuTip=fuTip; ctx_fuMid=fuMid;
