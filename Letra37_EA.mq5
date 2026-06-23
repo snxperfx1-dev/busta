@@ -109,6 +109,8 @@ input ulong         InpMagic            = 370037;       // Magic number
 input ulong         InpDeviation        = 20;           // Max slippage (points)
 input string        InpComment          = "Letra37";    // Order comment
 input bool          InpShowStatus       = true;         // Show status panel (Comment)
+input bool          InpDebugEntries     = true;         // Print full entry reasoning to the Experts log (why each trade was taken)
+input bool          InpDebugBlocks      = false;        // Also log why entries are BLOCKED (verbose - maps near-misses)
 
 input group "Letra37 EA - v60 Context Filters"
 input bool   InpUseV60Context   = true;    // Compute v60 context (network / curve-life / TIE / narrative)
@@ -656,6 +658,24 @@ void TryEnter()
    if(ok){
       gTradesToday++;
       gEntryBlock="ENTERED "+_trig;
+      //--- DEBUG: full entry reasoning so we can map where it needs improving ---
+      if(InpDebugEntries){
+         double _risk=MathAbs(entry-slBase); double _rr=_risk>0?MathAbs(tp-entry)/_risk:0.0;
+         int _cb=ConsensusBias();
+         Print("=== ENTRY ",(dir==1?"BUY":"SELL")," src=",_trig,
+               "  @",DoubleToString(entry,_Digits)," SL=",DoubleToString(slBase,_Digits)," TP=",DoubleToString(tp,_Digits),
+               " lot=",DoubleToString(lot,2)," RR=",DoubleToString(_rr,2)," SLpts=",DoubleToString(_risk/_Point,0));
+         Print("    TRIGGER : arrow=",(_arrow?"Y":"n")," DOE=",cur_doeAction," FU=",(fuEntry?"Y":"n"),
+               " MTF=",(mtfEntry?cur_mtfEntryTF+" dom"+DoubleToString(cur_mtfEntryDom,0)+"%":"n"),
+               " aggr=",(aggressive?"Y":"n"));
+         Print("    OWNER   : ",cur_curveOwner," ",(cur_ownerDir==1?"Bull":cur_ownerDir==-1?"Bear":"Flat"),
+               "  trans=",cur_transState,"  camp=",ctx_campaign,"  atFlip=",(ctx_atFlip?"Y":"n"),"  ready=",cur_entryReady);
+         Print("    RECUR   : dom=",DoubleToString(cur_domTransfer,0),"%  comp=",cur_compRegime,
+               "  depth=",cur_recDepth,"/",cur_expRecDepth,"  budget=",DoubleToString(cur_curveBudget,0),"%  toFlip=",DoubleToString(cur_distFlipAtr,1),"ATR  entryP=",DoubleToString(cur_entryProb,0),"%");
+         Print("    TERMINAL: shifts=",ctx_termShifts,"/",ctx_termExpected,"  m1=",ctx_termM1Cycles,"  done=",(ctx_termComplete?"Y":"n"),
+               "  induction=",(ctx_atTrueInduction?"TRUE":"-"),"  manip=",(ctx_inManipBand?"Y":"n"),"  failSwing=",(ctx_failureSwing?"Y":"n"),"  fuMerged=",(ctx_fuMerged?"Y":"n"));
+         Print("    THESIS  : ",(_cb==1?"BULL":_cb==-1?"BEAR":"neutral"),"  net=",cur_dirM5==0?0:cur_dirM5,"  narr=",cur_cmdNarrative,"  | M1 ",f_waveDirLabel(cur_dirM1)," M5 ",f_waveDirLabel(cur_dirM5)," H1 ",f_waveDirLabel(cur_dirH1)," H4 ",f_waveDirLabel(cur_dirH4));
+      }
       ulong tk=trade.ResultOrder();
       // register live position (market entries fill immediately)
       if(posinfo.SelectByTicket(trade.ResultDeal())) {}
@@ -825,6 +845,8 @@ void OnTick()
       ComputeEngine();          // full recompute -> sets cur_* for last closed bar
       if(g_lastProcessed>=0){
          TryEnter();             // evaluate entry on the just-closed bar
+         if(InpDebugBlocks && StringFind(gEntryBlock,"ENTERED")<0 && gEntryBlock!="-" && gEntryBlock!="no signal (awaiting Return)")
+            Print("[no-entry] ",gEntryBlock,"   | owner ",cur_curveOwner," ",cur_transState," camp ",ctx_campaign," dom ",DoubleToString(cur_domTransfer,0),"%");
          ManagePositions();      // re-manage with fresh engine state
          ShowStatus();
       }
