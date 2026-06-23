@@ -23,7 +23,7 @@
 #include <Trade/AccountInfo.mqh>
 
 //===================================================================
-//  ENGINE  (from Letra37_Engine.mqh)
+//  ENGINE (inlined from Letra37_Engine.mqh)
 //===================================================================
 //+------------------------------------------------------------------+
 //| Letra37_Engine.mqh                                               |
@@ -2491,7 +2491,7 @@ void EngineRun(const int n,const datetime &time[],const double &open[],const dou
 
 
 //===================================================================
-//  V60 CONTEXT  (from Letra37_Context.mqh)
+//  V60 CONTEXT (inlined from Letra37_Context.mqh)
 //===================================================================
 //+------------------------------------------------------------------+
 //| Letra37_Context.mqh                                              |
@@ -3071,7 +3071,7 @@ void ContextRun(const int bars)
 
 
 //===================================================================
-//  EXPERT ADVISOR  (from Letra37_EA.mq5)
+//  EXPERT ADVISOR (from Letra37_EA.mq5)
 //===================================================================
 
 //==================================================================
@@ -3162,6 +3162,7 @@ input string        InpComment          = "Letra37";    // Order comment
 input bool          InpShowStatus       = true;         // Show status panel (Comment)
 input bool          InpDebugEntries     = true;         // Print full entry reasoning to the Experts log (why each trade was taken)
 input bool          InpDebugBlocks      = false;        // Also log why entries are BLOCKED (verbose - maps near-misses)
+input bool          InpDebugExits       = true;         // Print why each trade was CLOSED / its stop moved (maps early-exit & stop problems)
 
 input group "Letra37 EA - v60 Context Filters"
 input bool   InpUseV60Context   = true;    // Compute v60 context (network / curve-life / TIE / narrative)
@@ -3642,8 +3643,8 @@ void TryEnter()
    int ownDir=OwnPositionDir();
    if(ownDir!=0 && ownDir!=dir){
       if(OwnYoungerThan(InpMinHoldBars)){ gEntryBlock="hold (young pos, no flip)"; return; }   // don't flip a fresh trade
-      if(InpReverseOnOpposite){ CloseOwnPositions(0); DeletePendingOrders(); }
-      else if(InpExitOnOpposite){ CloseOwnPositions(-dir); }
+      if(InpReverseOnOpposite){ if(InpDebugExits) Print("=== FLIP  closing ",(ownDir==1?"BUY":"SELL")," to reverse into ",(dir==1?"BUY":"SELL"),"  (owner ",cur_curveOwner," ",f_waveDirLabel(cur_ownerDir),", thesis ",(ConsensusBias()==1?"BULL":ConsensusBias()==-1?"BEAR":"neutral"),")"); CloseOwnPositions(0); DeletePendingOrders(); }
+      else if(InpExitOnOpposite){ if(InpDebugExits) Print("=== EXIT  opposite-signal partial-flip: closing ",(ownDir==1?"BUY":"SELL")); CloseOwnPositions(-dir); }
       else { gEntryBlock="opposite pos open"; return; }
    }
    if(CountOwnPositions()>=InpMaxPositions){ gEntryBlock="max positions"; return; }
@@ -3750,6 +3751,27 @@ void TryEnter()
 //==================================================================
 // POSITION MANAGEMENT (every tick)
 //==================================================================
+//--- DEBUG: one line explaining WHY a trade was closed (so early exits can be mapped to the gate that fired) ---
+void DbgExit(const string why,const ulong tk,const int dir,const double openP,const double mkt,const double rMult)
+{
+   if(!InpDebugExits) return;
+   int cb=ConsensusBias();
+   Print("=== EXIT  ",(dir==1?"BUY":"SELL")," #",tk,"  why=",why,
+         "  R=",DoubleToString(rMult,2),
+         "  open=",DoubleToString(openP,_Digits)," mkt=",DoubleToString(mkt,_Digits));
+   Print("    CTX     : life=",DoubleToString(ctx_life,0),"  phase=",cur_ie1aPhase,"  narr=",ctx_narrState,
+         "  chainVit=",DoubleToString(ctx_chainVitality,0),"  conv=",(ctx_converging?"Y":"n"),
+         "  waveDir=",f_waveDirLabel(ctx_waveDir),"  thesis=",(cb==1?"BULL":cb==-1?"BEAR":"neutral"));
+   Print("    OWNER   : ",cur_curveOwner," ",f_waveDirLabel(cur_ownerDir),"  trans=",cur_transState,
+         "  | M1 ",f_waveDirLabel(cur_dirM1)," M5 ",f_waveDirLabel(cur_dirM5)," H1 ",f_waveDirLabel(cur_dirH1)," H4 ",f_waveDirLabel(cur_dirH4));
+}
+//--- DEBUG: one line explaining WHY a stop was moved (BE / trailing / migration) so 'stopped too early' can be traced ---
+void DbgMod(const string why,const ulong tk,const int dir,const double oldSL,const double newSL,const double mkt)
+{
+   if(!InpDebugExits) return;
+   Print("    SL-MOD  #",tk," ",why,"  ",(dir==1?"BUY":"SELL"),"  ",DoubleToString(oldSL,_Digits),
+         " -> ",DoubleToString(newSL,_Digits),"  (mkt ",DoubleToString(mkt,_Digits),")");
+}
 void ManagePositions()
 {
    double atr=cur_atr; if(atr<=0) atr=10*_Point;
@@ -3773,29 +3795,29 @@ void ManagePositions()
       int heldBars=(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/MathMax(PeriodSeconds(_Period),1));
       bool canSoftExit=(heldBars>=InpMinHoldBars);
       //--- always-on protective exits (broker SL/TP also always active) ---
-      if(InpCloseAtSessEnd && !SessionOK()){ trade.PositionClose(tk); continue; }
+      if(InpCloseAtSessEnd && !SessionOK()){ DbgExit("session-end",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
       //--- discretionary exits: only after the minimum hold (stops cutting straight away) ---
       //--- while the dominant thesis still backs this trade, HOLD through opposite blips ---
       int  cbHold=ConsensusBias();
       bool thesisSupports=(InpHoldWithThesis && cbHold!=0 && cbHold==dir);
       //--- THESIS FLIP: the panel's bias has turned against this open trade -> close it
       //--- (this is what removes a lingering short while the panel now reads "Bullish ...", and vice versa) ---
-      if(canSoftExit && InpExitOnThesisFlip && cbHold!=0 && cbHold!=dir){ trade.PositionClose(tk); continue; }
+      if(canSoftExit && InpExitOnThesisFlip && cbHold!=0 && cbHold!=dir){ DbgExit("thesis-flip (bias turned "+(cbHold==1?"BULL":"BEAR")+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
       if(canSoftExit && !thesisSupports){
-         if(InpExitOnInvalid && cur_invInvalidated){ trade.PositionClose(tk); continue; }
-         if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ trade.PositionClose(tk); continue; }
-         if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ trade.PositionClose(tk); continue; }
+         if(InpExitOnInvalid && cur_invInvalidated){ DbgExit("invalidated (active stop broken)",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+         if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ DbgExit("phase-flip ("+cur_ie1aPhase+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+         if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ DbgExit("opposite signal printed",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
       }
       if(canSoftExit){
          //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
-         if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ trade.PositionClose(tk); continue; }
+         if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ DbgExit("curve-life dead (life "+DoubleToString(ctx_life,0)+"<="+IntegerToString((int)InpCurveDeadBelow)+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
          //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
          if(InpUseV60Context && InpUseNarrativeMgmt && dir==ctx_waveDir){
-            if(ctx_chainVitality<=InpChainExitBelow){ trade.PositionClose(tk); continue; }
+            if(ctx_chainVitality<=InpChainExitBelow){ DbgExit("chain decayed (vit "+DoubleToString(ctx_chainVitality,0)+"<="+IntegerToString((int)InpChainExitBelow)+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
             if(ctx_narrState=="WEAKENING" && !ctx_converging){
                double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
                bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
-               if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
+               if(improve && trade.PositionModify(tk,be,curTP)){ DbgMod("narr-weakening->BE",tk,dir,curSL,be,mkt); if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
             }
          }
       }
@@ -3807,8 +3829,9 @@ void ManagePositions()
             double closeVol=NormalizeLot(vol*InpPartialPct/100.0);
             if(closeVol>0 && closeVol<vol){
                if(trade.PositionClosePartial(tk,closeVol)){ gMgPartialDone[mi]=true;
+                  DbgExit("partial TP1 ("+IntegerToString((int)InpPartialPct)+"% @"+DoubleToString(gMgTP1[mi],_Digits)+")",tk,dir,openP,mkt,rMult);
                   if(InpMoveBEAfterTP1){ double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
-                     if((dir==1&&be>curSL)||(dir==-1&&(curSL==0||be<curSL))) trade.PositionModify(tk,be,curTP); gMgBEDone[mi]=true; }
+                     if((dir==1&&be>curSL)||(dir==-1&&(curSL==0||be<curSL))){ trade.PositionModify(tk,be,curTP); DbgMod("post-TP1->BE",tk,dir,curSL,be,mkt); } gMgBEDone[mi]=true; }
                }
             }
          }
@@ -3822,7 +3845,7 @@ void ManagePositions()
       if(InpUseBreakeven && inProfitZone && (mi<0||!gMgBEDone[mi])){
          double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
          bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
-         if(improve && trade.PositionModify(tk,be,curTP)){ if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
+         if(improve && trade.PositionModify(tk,be,curTP)){ DbgMod("break-even (R "+DoubleToString(rMult,2)+")",tk,dir,curSL,be,mkt); if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
       }
 
       //--- trailing (only once we're in the profit zone, so we never trail a fresh trade out) ---
@@ -3840,7 +3863,7 @@ void ManagePositions()
          // never trail to the losing side of entry before BE
          if(dir==1 && newSL<openP && !(mi>=0&&gMgBEDone[mi])) improve=improve&&false;
          if(dir==-1&& newSL>openP && !(mi>=0&&gMgBEDone[mi])) improve=improve&&false;
-         if(improve) trade.PositionModify(tk,newSL,curTP);
+         if(improve){ trade.PositionModify(tk,newSL,curTP); DbgMod((InpUseMigrationTrail&&ctx_cpState=="PERSISTING"?"trail-migration618":"trail"),tk,dir,curSL,newSL,mkt); }
       }
    }
 }
