@@ -3214,6 +3214,7 @@ int      gTradesToday   = 0;
 bool     gHalted        = false;
 string   gEntryBlock    = "-";   // live reason the EA is NOT entering (shown in panel)
 double   gRecSizeMult   = 1.0;   // recursion-size-aware stop multiplier (set per entry from compression)
+bool     gMktClosed     = false; // set when a management/flip order is rejected with 'Market closed' - stops the every-tick retry storm; reset each new bar (server SL/TP still protect the position)
 
 //--- chart-TF rates for the engine ---
 datetime eaT[]; double eaO[],eaH[],eaL[],eaC[],eaVol[];
@@ -3333,7 +3334,7 @@ void CloseOwnPositions(const int dirFilter=0) // dirFilter 0=all, 1=longs, -1=sh
       if(PositionGetInteger(POSITION_MAGIC)!=(long)InpMagic || PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
       int d=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY?1:-1;
       if(dirFilter!=0 && d!=dirFilter) continue;
-      trade.PositionClose(tk);
+      if(!trade.PositionClose(tk) && trade.ResultRetcode()==TRADE_RETCODE_MARKET_CLOSED){ gMktClosed=true; return; }
    }
 }
 void DeletePendingOrders()
@@ -3772,8 +3773,20 @@ void DbgMod(const string why,const ulong tk,const int dir,const double oldSL,con
    Print("    SL-MOD  #",tk," ",why,"  ",(dir==1?"BUY":"SELL"),"  ",DoubleToString(oldSL,_Digits),
          " -> ",DoubleToString(newSL,_Digits),"  (mkt ",DoubleToString(mkt,_Digits),")");
 }
+//--- returns true (and arms the back-off flag) if the LAST trade request was rejected because the market is closed ---
+bool MktClosed()
+{
+   uint rc=trade.ResultRetcode();
+   if(rc==TRADE_RETCODE_MARKET_CLOSED || rc==TRADE_RETCODE_TRADE_DISABLED || rc==TRADE_RETCODE_CLOSE_ONLY){
+      gMktClosed=true;
+      if(InpDebugExits) Print("=== MARKET CLOSED -> backing off all order actions until next bar (rc=",rc,")");
+      return true;
+   }
+   return false;
+}
 void ManagePositions()
 {
+   if(gMktClosed) return;                 // market is closed -> skip all discretionary order actions until the next bar (server SL/TP still active)
    double atr=cur_atr; if(atr<=0) atr=10*_Point;
    for(int q=PositionsTotal()-1;q>=0;q--){
       ulong tk=PositionGetTicket(q);
@@ -3795,25 +3808,25 @@ void ManagePositions()
       int heldBars=(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/MathMax(PeriodSeconds(_Period),1));
       bool canSoftExit=(heldBars>=InpMinHoldBars);
       //--- always-on protective exits (broker SL/TP also always active) ---
-      if(InpCloseAtSessEnd && !SessionOK()){ DbgExit("session-end",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+      if(InpCloseAtSessEnd && !SessionOK()){ DbgExit("session-end",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
       //--- discretionary exits: only after the minimum hold (stops cutting straight away) ---
       //--- while the dominant thesis still backs this trade, HOLD through opposite blips ---
       int  cbHold=ConsensusBias();
       bool thesisSupports=(InpHoldWithThesis && cbHold!=0 && cbHold==dir);
       //--- THESIS FLIP: the panel's bias has turned against this open trade -> close it
       //--- (this is what removes a lingering short while the panel now reads "Bullish ...", and vice versa) ---
-      if(canSoftExit && InpExitOnThesisFlip && cbHold!=0 && cbHold!=dir){ DbgExit("thesis-flip (bias turned "+(cbHold==1?"BULL":"BEAR")+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+      if(canSoftExit && InpExitOnThesisFlip && cbHold!=0 && cbHold!=dir){ DbgExit("thesis-flip (bias turned "+(cbHold==1?"BULL":"BEAR")+")",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
       if(canSoftExit && !thesisSupports){
-         if(InpExitOnInvalid && cur_invInvalidated){ DbgExit("invalidated (active stop broken)",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
-         if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ DbgExit("phase-flip ("+cur_ie1aPhase+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
-         if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ DbgExit("opposite signal printed",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+         if(InpExitOnInvalid && cur_invInvalidated){ DbgExit("invalidated (active stop broken)",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
+         if(InpExitOnPhaseFlip && (cur_ie1aPhase=="Absorption"||cur_ie1aPhase=="Retracement")){ DbgExit("phase-flip ("+cur_ie1aPhase+")",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
+         if(InpExitOnOpposite && ((dir==1&&cur_shortSignal)||(dir==-1&&cur_longSignal))){ DbgExit("opposite signal printed",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
       }
       if(canSoftExit){
          //--- v60 curve-life exit: close when the curve in our direction goes DEAD ---
-         if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ DbgExit("curve-life dead (life "+DoubleToString(ctx_life,0)+"<="+IntegerToString((int)InpCurveDeadBelow)+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+         if(InpUseV60Context && InpUseCurveLifeExit && ctx_life<=InpCurveDeadBelow && dir==ctx_waveDir){ DbgExit("curve-life dead (life "+DoubleToString(ctx_life,0)+"<="+IntegerToString((int)InpCurveDeadBelow)+")",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
          //--- v60 narrative management: decayed chain -> exit; fading story -> lock to break-even ---
          if(InpUseV60Context && InpUseNarrativeMgmt && dir==ctx_waveDir){
-            if(ctx_chainVitality<=InpChainExitBelow){ DbgExit("chain decayed (vit "+DoubleToString(ctx_chainVitality,0)+"<="+IntegerToString((int)InpChainExitBelow)+")",tk,dir,openP,mkt,rMult); trade.PositionClose(tk); continue; }
+            if(ctx_chainVitality<=InpChainExitBelow){ DbgExit("chain decayed (vit "+DoubleToString(ctx_chainVitality,0)+"<="+IntegerToString((int)InpChainExitBelow)+")",tk,dir,openP,mkt,rMult); if(!trade.PositionClose(tk) && MktClosed()) return; continue; }
             if(ctx_narrState=="WEAKENING" && !ctx_converging){
                double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
                bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
@@ -3833,6 +3846,7 @@ void ManagePositions()
                   if(InpMoveBEAfterTP1){ double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
                      if((dir==1&&be>curSL)||(dir==-1&&(curSL==0||be<curSL))){ trade.PositionModify(tk,be,curTP); DbgMod("post-TP1->BE",tk,dir,curSL,be,mkt); } gMgBEDone[mi]=true; }
                }
+               else if(MktClosed()) return;   // market shut at the TP1 touch -> stop retrying every tick (this was the #15 storm)
             }
          }
       }
@@ -3846,6 +3860,7 @@ void ManagePositions()
          double be=openP+(dir==1?InpBEOffsetPoints*_Point:-InpBEOffsetPoints*_Point); be=NormPrice(be);
          bool improve=(dir==1?(be>curSL):(curSL==0||be<curSL));
          if(improve && trade.PositionModify(tk,be,curTP)){ DbgMod("break-even (R "+DoubleToString(rMult,2)+")",tk,dir,curSL,be,mkt); if(mi>=0) gMgBEDone[mi]=true; curSL=be; }
+         else if(improve && MktClosed()) return;
       }
 
       //--- trailing (only once we're in the profit zone, so we never trail a fresh trade out) ---
@@ -3863,7 +3878,7 @@ void ManagePositions()
          // never trail to the losing side of entry before BE
          if(dir==1 && newSL<openP && !(mi>=0&&gMgBEDone[mi])) improve=improve&&false;
          if(dir==-1&& newSL>openP && !(mi>=0&&gMgBEDone[mi])) improve=improve&&false;
-         if(improve){ trade.PositionModify(tk,newSL,curTP); DbgMod((InpUseMigrationTrail&&ctx_cpState=="PERSISTING"?"trail-migration618":"trail"),tk,dir,curSL,newSL,mkt); }
+         if(improve){ if(trade.PositionModify(tk,newSL,curTP)) DbgMod((InpUseMigrationTrail&&ctx_cpState=="PERSISTING"?"trail-migration618":"trail"),tk,dir,curSL,newSL,mkt); else if(MktClosed()) return; }
       }
    }
 }
@@ -3916,6 +3931,7 @@ void OnTick()
    bool newBar=(bt!=gLastBarTime);
    if(newBar){
       gLastBarTime=bt;
+      gMktClosed=false;          // new bar -> market may have reopened; re-allow management/flip order actions
       ComputeEngine();          // full recompute -> sets cur_* for last closed bar
       if(g_lastProcessed>=0){
          TryEnter();             // evaluate entry on the just-closed bar
